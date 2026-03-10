@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TradeInfo – NASDAQ Monitor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <span class="logo">&#9650; TradeInfo</span>
+      <span class="subtitle">NASDAQ Stock Monitor</span>
+    </div>
+    <div class="header-right">
+      <div id="market-state" class="market-badge">
+        <span class="market-dot"></span>
+        <span id="market-label">–</span>
+      </div>
+      <div class="refresh-info">
+        <span id="last-refresh">Ej uppdaterad</span>
+        <button id="refresh-btn" class="btn-icon" title="Uppdatera nu">&#8635;</button>
+        <span class="countdown-wrap">om <span id="countdown">30</span>s</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- LEFT PANEL: Stock browser -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h2>NASDAQ-aktier</h2>
+        <div id="symbol-count" class="count-badge">Laddar…</div>
+      </div>
+      <div class="search-wrap">
+        <input type="text" id="search-input" placeholder="Sök symbol eller namn…" autocomplete="off">
+        <button id="search-clear" class="clear-btn" title="Rensa">&times;</button>
+      </div>
+      <div id="symbol-list-container">
+        <ul id="symbol-list">
+          <li class="placeholder-item">Hämtar aktielista…</li>
+        </ul>
+        <div id="list-footer">
+          <span id="showing-count"></span>
+          <button id="load-more-btn" class="btn-link">Visa fler</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- RIGHT PANEL: Detail + Watchlist -->
+    <section id="watchlist-panel">
+      <!-- Detail section (always visible) -->
+      <div id="detail-panel">
+        <div id="detail-body">
+          <div class="detail-placeholder">Klicka på en rad i listan för att visa detaljer</div>
+        </div>
+        <div id="detail-articles" style="display:none"></div>
+      </div>
+
+      <div class="watchlist-header">
+        <h2>Min bevakningslista</h2>
+        <span id="watchlist-count" class="count-badge">0 aktier</span>
+      </div>
+
+      <div id="watchlist-empty" class="empty-state">
+        <div class="empty-icon">&#128202;</div>
+        <p>Inga aktier tillagda ännu.</p>
+        <p class="empty-hint">Klicka på en aktie i listan till vänster för att lägga till den.</p>
+      </div>
+
+      <div id="watchlist-container" style="display:none">
+        <div class="table-wrap">
+          <table id="watchlist-table">
+            <thead>
+              <tr>
+                <th class="col-symbol">Symbol</th>
+                <th class="col-name">Namn</th>
+                <th class="col-price">Pris</th>
+                <th class="col-change">Förändring</th>
+                <th class="col-changepct">%</th>
+                <th class="col-open">Öppning</th>
+                <th class="col-high">Dag H</th>
+                <th class="col-low">Dag L</th>
+                <th class="col-volume">Volym</th>
+                <th class="col-avgvol">Snitt Vol.</th>
+                <th class="col-mktcap">Mkt Cap</th>
+                <th class="col-pe">P/E</th>
+                <th class="col-forwardpe">Fwd P/E</th>
+                <th class="col-eps">EPS</th>
+                <th class="col-52h">52v Hög</th>
+                <th class="col-52l">52v Låg</th>
+                <th class="col-div">Utd. Yield</th>
+                <th class="col-beta">Beta</th>
+                <th class="col-pb">P/B</th>
+                <th class="col-bid">Köp</th>
+                <th class="col-ask">Sälj</th>
+                <th class="col-action"></th>
+              </tr>
+            </thead>
+            <tbody id="watchlist-body">
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="status-bar">
+        <span id="status-message">Klar</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+node_modules/
+.claude/
+test_quotes.json
