@@ -36,7 +36,10 @@
     <aside id="sidebar">
       <div class="sidebar-header">
         <h2>NASDAQ-aktier</h2>
-        <div id="symbol-count" class="count-badge">Laddar…</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div id="symbol-count" class="count-badge">Laddar…</div>
+          <button id="sidebar-toggle" class="btn-icon" title="Dölj/visa lista">&#9664;</button>
+        </div>
       </div>
       <div class="search-wrap">
         <input type="text" id="search-input" placeholder="Sök symbol eller namn…" autocomplete="off">

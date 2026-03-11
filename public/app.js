@@ -1062,3 +1062,8 @@ async function init() {
 }
 
 init();
+
+// ─── Sidebar toggle ────────────────────────────────────────
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+  document.querySelector('main').classList.toggle('sidebar-hidden');
+});

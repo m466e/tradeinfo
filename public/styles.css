@@ -147,6 +147,10 @@ main {
   grid-template-columns: 300px 1fr;
   height: calc(100vh - 52px);
   overflow: hidden;
+  transition: grid-template-columns 0.25s ease;
+}
+main.sidebar-hidden {
+  grid-template-columns: 0px 1fr;
 }
 
 /* ─── Sidebar ────────────────────────────────────────────── */
@@ -156,7 +160,10 @@ main {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
+#sidebar-toggle { transition: transform 0.25s ease; }
+main.sidebar-hidden #sidebar-toggle { transform: rotate(180deg); }
 
 .sidebar-header {
   display: flex;
