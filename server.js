@@ -367,7 +367,7 @@ async function fetchRedditPosts(symbol) {
 }
 
 // ─── Risk calculations ────────────────────────────────────
-function calcPriceRisk(chartResult) {
+function calcPriceRisk(chartResult, quote) {
   const q       = chartResult?.indicators?.quote?.[0];
   const closes  = (q?.close  ?? []).filter(v => v != null);
   const volumes = (q?.volume ?? []).filter(v => v != null);
@@ -403,10 +403,18 @@ function calcPriceRisk(chartResult) {
     ? (todayReturn < 0 ? (volumeRatio - 1) * 10 : -(volumeRatio - 1) * 5)
     : 0;
 
-  const score     = Math.round(Math.max(5, Math.min(95, 50 + returnContrib + todayContrib + volContrib + volAmp)));
+  let score       = Math.round(Math.max(5, Math.min(95, 50 + returnContrib + todayContrib + volContrib + volAmp)));
   const s3        = trend3d   >= 0 ? '+' : '';
   const sT        = todayReturn >= 0 ? '+' : '';
   const volStr    = volumeRatio.toFixed(1) + '× snitt';
+
+  // Bid-Ask spread component — widens risk score for illiquid quotes
+  if (quote?.bid > 0 && quote?.ask > 0 && quote?.price > 0) {
+    const spread = (quote.ask - quote.bid) / quote.price;
+    if (spread > 0.005) score = Math.min(100, score + 20);       // > 50 bps: kritisk
+    else if (spread > 0.002) score = Math.min(100, score + 10);  // > 20 bps: varning
+    else if (spread > 0.0005) score = Math.min(100, score + 5);  // > 5 bps: noterbar
+  }
 
   return {
     score,
@@ -497,27 +505,26 @@ function calcRSI(closes, period = 14) {
 }
 
 // ─── VWAP calculation ─────────────────────────────────────
-function calcVWAP(chartResult) {
-  const q = chartResult?.indicators?.quote?.[0];
-  if (!q) return null;
-  let numSum = 0, denomSum = 0;
-  const len = Math.min(
-    q.close?.length ?? 0,
-    q.high?.length  ?? 0,
-    q.low?.length   ?? 0,
-    q.volume?.length ?? 0
-  );
-  for (let i = 0; i < len; i++) {
-    if (q.close[i] == null || q.high[i] == null || q.low[i] == null || q.volume[i] == null) continue;
-    const tp = (q.high[i] + q.low[i] + q.close[i]) / 3;
-    numSum   += tp * q.volume[i];
-    denomSum += q.volume[i];
-  }
-  return denomSum > 0 ? numSum / denomSum : null;
+// Takes intraday data { timestamps, closes } from fetchIntradayChart.
+// Approximates VWAP as mean of intraday closes when per-minute volume is unavailable.
+function calcVWAP(intradayData) {
+  const closes = intradayData?.closes;
+  if (!closes?.length) return null;
+  return closes.reduce((s, c) => s + c, 0) / closes.length;
+}
+
+// ─── Market-cap signal reliability multiplier ─────────────
+function signalReliabilityMultiplier(marketCap) {
+  if (!marketCap) return 1.0;
+  if (marketCap > 200e9) return 1.2;
+  if (marketCap > 10e9)  return 1.0;
+  if (marketCap > 2e9)   return 0.85;
+  if (marketCap > 300e6) return 0.70;
+  return 0.5;
 }
 
 // ─── Buy/Sell recommendation ──────────────────────────────
-function calcRecommendation(chartResult, quote, newsRisk) {
+function calcRecommendation(chartResult, quote, newsRisk, intradayData) {
   const q      = chartResult?.indicators?.quote?.[0];
   const closes = (q?.close ?? []).filter(v => v != null);
   const signals = [];
@@ -612,8 +619,8 @@ function calcRecommendation(chartResult, quote, newsRisk) {
     signals.push({ name: 'Nyheter', score: nv, label: nl });
   }
 
-  // 10. VWAP-signal
-  const vwap = calcVWAP(chartResult);
+  // 10. VWAP-signal (intradagsdata)
+  const vwap = calcVWAP(intradayData);
   if (vwap !== null && quote?.price) {
     const diff = (quote.price - vwap) / vwap;
     const vv   = diff > 0.03 ? 0.5 : diff > 0.005 ? 0.25 : diff > -0.005 ? 0 : diff > -0.03 ? -0.25 : -0.5;
@@ -621,9 +628,73 @@ function calcRecommendation(chartResult, quote, newsRisk) {
     signals.push({ name: 'VWAP', score: vv, label: `${Math.abs(diff * 100).toFixed(1)}% ${dir} VWAP` });
   }
 
+  // 11. Volymratio
+  if (quote?.volume && quote?.avgVolume && quote?.avgVolume > 0) {
+    const ratio = quote.volume / quote.avgVolume;
+    const changeDir = (quote.changePct ?? 0) >= 0 ? 1 : -1;
+    if (ratio > 1.5) {
+      const vv = changeDir * (ratio > 3 ? 1 : ratio > 2 ? 0.75 : 0.5);
+      signals.push({ name: 'Volym', score: vv, label: `${ratio.toFixed(1)}× snittvolym` });
+    } else if (ratio < 0.5) {
+      signals.push({ name: 'Volym', score: 0, label: `${ratio.toFixed(1)}× snittvolym – svag övertygelse` });
+    }
+  }
+
+  // 12. Dagsspann-position
+  if (quote?.dayHigh && quote?.dayLow && quote?.price) {
+    const range = quote.dayHigh - quote.dayLow;
+    if (range > 0) {
+      const pos = (quote.price - quote.dayLow) / range;
+      const dv = pos > 0.8 ? 0.75 : pos > 0.6 ? 0.375 : pos > 0.4 ? 0 : pos > 0.2 ? -0.375 : -0.75;
+      const pct = (pos * 100).toFixed(0);
+      const dl = pos > 0.7 ? `Nära dagshögsta (${pct}% av spann)`
+               : pos < 0.3 ? `Nära dagslägsta (${pct}% av spann)`
+               : `Mitt i dagsspann (${pct}%)`;
+      signals.push({ name: 'Dagsspann', score: dv, label: dl });
+    }
+  }
+
+  // 13. Pris vs öppningskurs (dagstrend)
+  if (quote?.price && quote?.open && quote?.prevClose) {
+    const gap      = (quote.open - quote.prevClose) / quote.prevClose;
+    const fromOpen = (quote.price - quote.open) / quote.open;
+    const combined = gap * 0.4 + fromOpen * 0.6;
+    const gv = combined > 0.03 ? 0.75 : combined > 0.01 ? 0.375 :
+               combined > -0.01 ? 0 : combined > -0.03 ? -0.375 : -0.75;
+    const gapLabel = Math.abs(gap) > 0.005 ? ` (gap ${gap >= 0 ? '+' : ''}${(gap * 100).toFixed(1)}%)` : '';
+    const dir = fromOpen >= 0 ? 'upp' : 'ned';
+    signals.push({ name: 'Dagstrend', score: gv,
+      label: `${Math.abs(fromOpen * 100).toFixed(1)}% ${dir} sedan öppning${gapLabel}` });
+  }
+
+  // 14. PEG-approximation
+  if (quote?.pe > 0 && quote?.forwardPE > 0 && quote.pe !== quote.forwardPE) {
+    const impliedGrowth = (quote.pe / quote.forwardPE) - 1;
+    if (impliedGrowth > 0) {
+      const peg = quote.forwardPE / (impliedGrowth * 100);
+      if (peg > 0 && peg < 100) {
+        const pgv = peg < 0.5 ? 1 : peg < 1.0 ? 0.5 : peg < 1.5 ? 0 : peg < 2.0 ? -0.5 : -1;
+        signals.push({ name: 'PEG', score: pgv, label: `PEG ≈ ${peg.toFixed(1)}` });
+      }
+    }
+  }
+
+  // 15. P/B-signal
+  if (quote?.priceToBook != null && quote.priceToBook > 0) {
+    if (!quote.marketCap || quote.marketCap < 500e9) {
+      const pb  = quote.priceToBook;
+      const pbv = pb < 1.0 ? 0.75 : pb < 2.0 ? 0.375 : pb < 5.0 ? 0 : pb < 10.0 ? -0.25 : -0.5;
+      const pbl = pb < 1.0 ? `P/B ${pb.toFixed(1)} – under bokfört värde`
+                : pb > 10  ? `P/B ${pb.toFixed(1)} – högt premiumvärdering`
+                : `P/B ${pb.toFixed(1)}`;
+      signals.push({ name: 'P/B', score: pbv, label: pbl });
+    }
+  }
+
   if (signals.length === 0) return null;
 
-  const avg = signals.reduce((s, x) => s + x.score, 0) / signals.length;
+  const rawAvg = signals.reduce((s, x) => s + x.score, 0) / signals.length;
+  const avg    = Math.max(-1, Math.min(1, rawAvg * signalReliabilityMultiplier(quote?.marketCap)));
 
   let recommendation, color, label;
   if      (avg >  0.4)  { recommendation = 'KÖP';  color = '#3fb950'; label = 'Stark köpsignal';  }
@@ -746,12 +817,13 @@ app.get('/api/risk/:symbol', async (req, res) => {
   if (cached && (Date.now() - cached.cachedAt) < RISK_TTL) return res.json(cached.data);
 
   try {
-    const [chartResult, yahooItems, googleItems, redditItems, quoteResults] = await Promise.all([
+    const [chartResult, yahooItems, googleItems, redditItems, quoteResults, intradayData] = await Promise.all([
       fetchPriceHistory(symbol).catch(() => null),
       fetchYahooNews(symbol).catch(() => []),
       fetchGoogleNews(symbol).catch(() => []),
       fetchRedditPosts(symbol).catch(() => []),
       fetchYahooQuotes([symbol]).catch(() => []),
+      fetchIntradayChart(symbol).catch(() => null),
     ]);
     const quote = quoteResults.length > 0 ? normalizeQuote(quoteResults[0]) : null;
     // Build a list of terms to match against: symbol + significant name words
@@ -768,11 +840,11 @@ app.get('/api/risk/:symbol', async (req, res) => {
       return terms.some(t => text.includes(t));
     });
 
-    const priceRisk      = calcPriceRisk(chartResult);
+    const priceRisk      = calcPriceRisk(chartResult, quote);
     const newsRisk       = calcNewsRisk(allItems);
     const stopLoss       = calcStopLoss(chartResult);
-    const vwap           = calcVWAP(chartResult);
-    const recommendation = calcRecommendation(chartResult, quote, newsRisk);
+    const vwap           = calcVWAP(intradayData);
+    const recommendation = calcRecommendation(chartResult, quote, newsRisk, intradayData);
     const score = Math.round(priceRisk.score * 0.55 + newsRisk.score * 0.45);
     const meta  = riskMeta(score);
     const data  = { symbol, score, ...meta, priceRisk, newsRisk, stopLoss, vwap, recommendation };
