@@ -71,15 +71,30 @@ API endpoints:
 - `_chartResizeObserver` disconnected on symbol change
 
 **Recommendation signals** (15 factors, averaged -1 to +1, weighted by `signalReliabilityMultiplier`):
-1. RSI (14) 2. 5-day momentum 3. SMA20 4. MA50/200 cross 5. Price vs SMA50 6. 52-week position 7. P/E 8. Forward P/E 9. News sentiment 10. VWAP (intraday mean) 11. Volume ratio 12. Day range position 13. Day trend (gap + from open) 14. PEG approximation 15. P/B (skipped for marketCap > 500B)
+1. RSI (14) 2. 5-day momentum 3. SMA20 4. MA50/200 cross 5. Price vs SMA50 6. 52-week position 7. P/E 8. Forward P/E 9. News sentiment 10. VWAP (true, volume-weighted) 11. Volume ratio 12. Day range position 13. Day trend (gap + from open) 14. PEG approximation 15. P/B (skipped for marketCap > 500B)
 
 `signalReliabilityMultiplier(marketCap)`: mega-cap 1.2×, large 1.0×, mid 0.85×, small 0.70×, micro 0.5×
 
 `calcPriceRisk` also adds bid-ask spread component (+5/10/20 pts for illiquid quotes).
 
+**Sentiment analysis** (`scoreSentiment` → `calcNewsRisk`):
+- `POSITIVE_PHRASES` / `NEGATIVE_PHRASES`: multi-word phrases matched first (weight 2×), removed from text before word scoring
+- `POSITIVE_WORDS` / `NEGATIVE_WORDS`: Set-based exact token matching (no substring false positives)
+- `NEGATORS`: 3-token window inverts following sentiment ("not strong" → negative)
+- Time weighting: ≤24h = 1.0×, ≤72h = 0.6×, older = 0.3×
+
+**normalizeQuote** includes `earningsTimestamp` (from `earningsTimestamp` or `earningsTimestampStart`). Shown in detail panel "Övrigt" column with orange badge if within 7 days.
+
 **Price alerts** (`state.alerts`, localStorage `tradeinfo_alerts`):
 - Bell button per watchlist row opens modal with above/below thresholds
 - `checkAlerts()` called on every quote refresh, triggers Web Notifications API on crossings
+
+**Portfolio tracking** (`state.portfolio`, localStorage `tradeinfo_portfolio`):
+- `#portfolio-panel` between watchlist table and detail panel, collapsed by default
+- Add positions: symbol + shares + avg price; volume-weighted average on duplicate
+- `renderPortfolio()` called on every quote refresh — live P&L ($, %) per position
+- Summary bar: total cost basis, market value, total P&L
+- Header badge shows total P&L (green/red) even when panel is collapsed
 
 **Sidebar toggle:**
 - `#sidebar-toggle` button positioned absolutely at the sidebar/main boundary (`left: 300px`, transitions to `0px`)
@@ -91,3 +106,6 @@ API endpoints:
 ## TODO
 
 - **CSV-export** — exportera bevakningslistan till CSV
+- **Realtidsdata** — WebSocket-stream från Alpaca för äkta realtidspriser (Yahoo Finance-quotes har ~15 min fördröjning)
+- **Scanner/filter** — filtrera bevakningslistan på signalkriterier (t.ex. RSI < 30 + volym > 1.5×)
+- **Opening Range Breakout** — beräkna och visa de första 15-30 minuternas prisspann
