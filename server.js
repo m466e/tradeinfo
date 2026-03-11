@@ -213,23 +213,56 @@ async function fetchPriceHistory(symbol, retryAuth = false) {
 }
 
 // ─── Fetch intraday chart via Finnhub (1m candles) ───────
-const FINNHUB_TOKEN = process.env.FINNHUB_TOKEN ?? '';
+const FINNHUB_TOKEN = (process.env.FINNHUB_TOKEN ?? '').trim();
 
-async function fetchIntradayChart(symbol) {
-  if (!FINNHUB_TOKEN) throw new Error('FINNHUB_TOKEN saknas i .env');
-
-  // NYSE/NASDAQ market hours: 09:30–16:00 ET
-  // Use a 24h window and let Finnhub return only market-hours candles
+async function fetchIntradayChartFinnhub(symbol) {
+  if (!FINNHUB_TOKEN) throw new Error('FINNHUB_TOKEN saknas');
   const to   = Math.floor(Date.now() / 1000);
   const from = to - 24 * 3600;
-
-  const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=1&from=${from}&to=${to}&token=${FINNHUB_TOKEN}`;
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  if (!res.ok) throw new Error(`Finnhub chart API: ${res.status}`);
+  const url  = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=1&from=${from}&to=${to}&token=${FINNHUB_TOKEN}`;
+  const res  = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (res.status === 403) throw new Error('Finnhub 403 – intradag-candles kräver betald plan');
+  if (!res.ok) throw new Error(`Finnhub: ${res.status}`);
   const data = await res.json();
-  // data.s === 'no_data' when market is closed or symbol unknown
   if (data.s !== 'ok') throw new Error(`Finnhub: ${data.s ?? 'no_data'}`);
-  return data; // { t, o, h, l, c, v, s }
+  return { timestamps: data.t, closes: data.c, open: data.o?.[0] ?? data.c?.[0], source: 'finnhub' };
+}
+
+// ─── Fetch intraday chart via Yahoo Finance (1m fallback) ─
+async function fetchIntradayChartYahoo(symbol, retryAuth = false) {
+  const auth = await getYFAuth();
+  const url  = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=false&crumb=${encodeURIComponent(auth.crumb)}`;
+  const res  = await fetch(url, {
+    headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/', 'Cookie': auth.cookie },
+  });
+  if ((res.status === 401 || res.status === 403) && !retryAuth) {
+    await getYFAuthWithRetry();
+    return fetchIntradayChartYahoo(symbol, true);
+  }
+  if (!res.ok) throw new Error(`Yahoo chart: ${res.status}`);
+  const json   = await res.json();
+  const result = json?.chart?.result?.[0];
+  if (!result) throw new Error('Yahoo chart: tomt svar');
+  const timestamps = result.timestamp ?? [];
+  const closes     = result.indicators?.quote?.[0]?.close ?? [];
+  const filtered   = timestamps.map((t, i) => ({ t, c: closes[i] })).filter(p => p.c != null);
+  return {
+    timestamps: filtered.map(p => p.t),
+    closes:     filtered.map(p => p.c),
+    open:       result.indicators?.quote?.[0]?.open?.[0] ?? filtered[0]?.c ?? null,
+    source:     'yahoo',
+  };
+}
+
+async function fetchIntradayChart(symbol) {
+  if (FINNHUB_TOKEN) {
+    try {
+      return await fetchIntradayChartFinnhub(symbol);
+    } catch (err) {
+      console.warn(`[chart] Finnhub misslyckades (${err.message}), faller tillbaka på Yahoo Finance`);
+    }
+  }
+  return fetchIntradayChartYahoo(symbol);
 }
 
 // ─── Fetch news (normalized to { title, link, publisher, time, source }) ──
@@ -644,18 +677,15 @@ app.get('/api/quote', async (req, res) => {
   }
 });
 
-// GET /api/chart/:symbol  — intraday 1m candles via Finnhub
+// GET /api/chart/:symbol  — intraday 1m candles (Finnhub → Yahoo fallback)
 app.get('/api/chart/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const data = await fetchIntradayChart(symbol);
-    console.log(`[chart] ${symbol}: ${data.t.length} points from Finnhub`);
-
-    const open = data.o?.[0] ?? data.c?.[0] ?? null;
-    const high = data.h?.length ? Math.max(...data.h) : null;
-    const low  = data.l?.length ? Math.min(...data.l) : null;
-
-    res.json({ timestamps: data.t, closes: data.c, open, high, low });
+    console.log(`[chart] ${symbol}: ${data.closes.length} punkter via ${data.source}`);
+    const high = data.closes.length ? Math.max(...data.closes) : null;
+    const low  = data.closes.length ? Math.min(...data.closes) : null;
+    res.json({ timestamps: data.timestamps, closes: data.closes, open: data.open, high, low });
   } catch (err) {
     console.error(`Intraday chart error ${symbol}:`, err.message);
     res.status(502).json({ error: err.message });
