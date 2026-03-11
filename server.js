@@ -213,7 +213,9 @@ async function fetchPriceHistory(symbol, retryAuth = false) {
 }
 
 // ─── Fetch intraday chart via Finnhub (1m candles) ───────
-const FINNHUB_TOKEN = (process.env.FINNHUB_TOKEN ?? '').trim();
+const FINNHUB_TOKEN  = (process.env.FINNHUB_TOKEN  ?? '').trim();
+const ALPACA_KEY     = (process.env.ALPACA_KEY     ?? '').trim();
+const ALPACA_SECRET  = (process.env.ALPACA_SECRET  ?? '').trim();
 
 async function fetchIntradayChartFinnhub(symbol) {
   if (!FINNHUB_TOKEN) throw new Error('FINNHUB_TOKEN saknas');
@@ -254,12 +256,55 @@ async function fetchIntradayChartYahoo(symbol, retryAuth = false) {
   };
 }
 
+// ─── Fetch intraday chart via Alpaca (1m candles, IEX feed) ──
+async function fetchIntradayChartAlpaca(symbol) {
+  if (!ALPACA_KEY || !ALPACA_SECRET) throw new Error('ALPACA_KEY/ALPACA_SECRET saknas');
+
+  // Today's market session: 09:30–16:00 ET
+  const now   = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+
+  const url = `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`
+    + `?timeframe=1Min`
+    + `&start=${start.toISOString()}`
+    + `&end=${now.toISOString()}`
+    + `&feed=iex`
+    + `&limit=1000`;
+
+  const res = await fetch(url, {
+    headers: {
+      'APCA-API-KEY-ID':     ALPACA_KEY,
+      'APCA-API-SECRET-KEY': ALPACA_SECRET,
+      'Accept':              'application/json',
+    },
+  });
+  if (!res.ok) throw new Error(`Alpaca: ${res.status}`);
+  const data = await res.json();
+  const bars = data.bars ?? [];
+  if (!bars.length) throw new Error('Alpaca: inga bars returnerades');
+
+  return {
+    timestamps: bars.map(b => Math.floor(new Date(b.t).getTime() / 1000)),
+    closes:     bars.map(b => b.c),
+    open:       bars[0]?.o ?? bars[0]?.c ?? null,
+    source:     'alpaca',
+  };
+}
+
 async function fetchIntradayChart(symbol) {
   if (FINNHUB_TOKEN) {
     try {
       return await fetchIntradayChartFinnhub(symbol);
     } catch (err) {
-      console.warn(`[chart] Finnhub misslyckades (${err.message}), faller tillbaka på Yahoo Finance`);
+      console.warn(`[chart] Finnhub misslyckades (${err.message})`);
+    }
+  }
+  if (ALPACA_KEY && ALPACA_SECRET) {
+    try {
+      return await fetchIntradayChartAlpaca(symbol);
+    } catch (err) {
+      console.warn(`[chart] Alpaca misslyckades (${err.message}), faller tillbaka på Yahoo Finance`);
     }
   }
   return fetchIntradayChartYahoo(symbol);
