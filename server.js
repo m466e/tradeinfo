@@ -25,27 +25,87 @@ const AUTH_TTL = 60 * 60 * 1000; // 1 hour
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-// ─── Sentiment word lists ─────────────────────────────────
-const POSITIVE_WORDS = [
+// ─── Sentiment analysis ───────────────────────────────────
+// Phrases are matched first (weight 2) to handle multi-word context
+// before individual word scoring, reducing false positives.
+const POSITIVE_PHRASES = [
+  'beats expectations','beat expectations','exceeds expectations','exceeded expectations',
+  'above expectations','better than expected','better than forecast',
+  'raised guidance','raises guidance','increases guidance','raised its guidance',
+  'record revenue','record profit','record earnings','record sales',
+  'rate cut','rate cuts','interest rate cut','fed cuts','fed rate cut',
+  'charges ahead','presses ahead','moves ahead','pushes ahead',
+  'strong buy','price target raised','target raised','outperform rating',
+  'share buyback','stock buyback','buyback program',
+];
+const NEGATIVE_PHRASES = [
+  'misses expectations','missed expectations','below expectations','worse than expected',
+  'cuts guidance','cut guidance','lowered guidance','lowers guidance','reduces guidance',
+  'profit warning','earnings warning','revenue warning','issues warning',
+  'sec charges','sec investigation','doj investigation','doj charges',
+  'class action','securities fraud','accounting fraud','restates earnings',
+  'files for bankruptcy','chapter 11','chapter 7','seeks bankruptcy',
+  'mass layoffs','mass layoff','significant layoffs','thousands of jobs',
+  'debt default','credit downgrade','rating downgrade','margin call',
+  'production halt','trading halt','fda rejection','fda refuses',
+];
+
+// Individual words — use exact token matching (word boundary), not substring
+const POSITIVE_WORDS = new Set([
   'beat','beats','exceeded','record','growth','gain','gains','profit','profits',
-  'surge','surges','surging','soar','soars','rise','rises','rally','rallies',
-  'strong','upgrade','upgrades','upgraded','bullish','increase','increases',
-  'expand','launch','success','revenue','dividend','buyback','outperform',
-  'overweight','breakthrough','opportunity','recovery','rebound','accelerate',
-  'improves','improved','upside','optimistic','raise','raises','partnership',
-  'deal','contract','award','record high','all-time high','strong buy',
-];
-const NEGATIVE_WORDS = [
-  'loss','losses','miss','misses','missed','decline','declines','fall','falls',
-  'drop','drops','cut','cuts','warn','warns','warning','lawsuit','sued','sues',
-  'bankruptcy','bankrupt','downgrade','downgrades','downgraded','bearish',
-  'decrease','decreases','crash','fraud','investigation','recall','layoff',
-  'layoffs','fine','fines','penalty','penalties','weak','concern','concerns',
-  'uncertainty','uncertain','disappointing','disappoints','struggles','slump',
-  'tumble','plunge','plunges','selloff','sell-off','recession','inflation',
-  'shortfall','deficit','suspend','halt','probe','charges','charged',
-  'class action','headwinds','challenges','downside','below expectations',
-];
+  'surge','surging','soar','soars','rally','rallies','strong','upgrade','upgraded',
+  'bullish','outperform','overweight','breakthrough','recovery','rebound',
+  'upside','optimistic','partnership','deal','award','accelerate','improved',
+  'dividend','success','expand','opportunity','positive','raised','acquiring',
+]);
+const NEGATIVE_WORDS = new Set([
+  'loss','losses','miss','misses','missed','decline','declines','drop','drops',
+  'warn','warns','warning','lawsuit','sued','bankruptcy','bankrupt','downgrade',
+  'downgraded','bearish','crash','fraud','investigation','recall','layoff','layoffs',
+  'fine','fines','penalty','penalties','weak','disappointing','disappoints',
+  'struggles','slump','tumble','plunge','selloff','recession','shortfall',
+  'deficit','suspended','halted','probe','headwinds','downside','volatile',
+]);
+
+// Negation words: flip sentiment of the next 1-3 tokens
+const NEGATORS = new Set([
+  'not','no','never','cannot','neither','nor',
+  "can't","won't","doesn't","don't","didn't","isn't","wasn't","hasn't","haven't",
+  'without','fails','fail','unable','unlikely','denies','deny',
+]);
+
+function scoreSentiment(title, summary) {
+  const text = ((title ?? '') + ' ' + (summary ?? '')).toLowerCase();
+  let pos = 0, neg = 0;
+
+  // 1. Phrase matching (higher weight, mark matched spans to avoid double-counting)
+  let remaining = text;
+  for (const phrase of POSITIVE_PHRASES) {
+    if (remaining.includes(phrase)) { pos += 2; remaining = remaining.replaceAll(phrase, ' '); }
+  }
+  for (const phrase of NEGATIVE_PHRASES) {
+    if (remaining.includes(phrase)) { neg += 2; remaining = remaining.replaceAll(phrase, ' '); }
+  }
+
+  // 2. Tokenize and score individual words with negation window
+  const tokens = remaining.split(/[\s,;:.!?()\[\]"']+/).filter(Boolean);
+  let negationWindow = 0;
+
+  for (const raw of tokens) {
+    const token = raw.replace(/[^a-z']/g, '');
+    if (!token) continue;
+
+    if (NEGATORS.has(token)) { negationWindow = 3; continue; }
+
+    const negated = negationWindow > 0;
+    negationWindow = Math.max(0, negationWindow - 1);
+
+    if (POSITIVE_WORDS.has(token)) { negated ? neg++ : pos++; }
+    else if (NEGATIVE_WORDS.has(token)) { negated ? pos++ : neg++; }
+  }
+
+  return { pos, neg };
+}
 
 // ─── LRU Cache ────────────────────────────────────────────
 class LRUCache {
@@ -476,14 +536,24 @@ function calcStopLoss(chartResult) {
 
 function calcNewsRisk(items) {
   if (!items?.length) return { score: 50, detail: '0 nyheter', positive: [], negative: [] };
+
+  const now = Date.now() / 1000;
+  // Time weight: full weight ≤24h, 0.6× ≤72h, 0.3× older
+  function timeWeight(ts) {
+    if (!ts) return 0.5;
+    const age = now - ts;
+    if (age < 86400)     return 1.0;
+    if (age < 86400 * 3) return 0.6;
+    return 0.3;
+  }
+
   let totalPos = 0, totalNeg = 0;
 
   const scored = items.map(item => {
-    const text = ((item.title ?? '') + ' ' + (item.summary ?? '')).toLowerCase();
-    let pos = 0, neg = 0;
-    for (const w of POSITIVE_WORDS) if (text.includes(w)) pos++;
-    for (const w of NEGATIVE_WORDS) if (text.includes(w)) neg++;
-    totalPos += pos; totalNeg += neg;
+    const { pos, neg } = scoreSentiment(item.title, item.summary);
+    const w = timeWeight(item.time);
+    totalPos += pos * w;
+    totalNeg += neg * w;
     return { title: item.title, link: item.link, publisher: item.publisher, time: item.time, source: item.source, score: pos - neg };
   });
 
