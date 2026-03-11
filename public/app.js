@@ -255,7 +255,13 @@ function updateWatchlistCount() {
 // ─── Sort helpers ─────────────────────────────────────────
 function getSortedWatchlist() {
   if (!state.sortKey) return state.watchlist;
+  const strKeys = new Set(['symbol', 'shortName']);
   return [...state.watchlist].sort((a, b) => {
+    if (strKeys.has(state.sortKey)) {
+      const va = state.sortKey === 'symbol' ? a : (state.quotes[a]?.shortName ?? a);
+      const vb = state.sortKey === 'symbol' ? b : (state.quotes[b]?.shortName ?? b);
+      return state.sortDir * va.localeCompare(vb);
+    }
     const qa = state.quotes[a];
     const qb = state.quotes[b];
     if (!qa || !qb) return 0;
