@@ -293,21 +293,22 @@ async function fetchIntradayChartAlpaca(symbol) {
 }
 
 async function fetchIntradayChart(symbol) {
-  if (FINNHUB_TOKEN) {
-    try {
-      return await fetchIntradayChartFinnhub(symbol);
-    } catch (err) {
-      console.warn(`[chart] Finnhub misslyckades (${err.message})`);
-    }
+  try {
+    return await fetchIntradayChartYahoo(symbol);
+  } catch (err) {
+    console.warn(`[chart] Yahoo misslyckades (${err.message})`);
   }
   if (ALPACA_KEY && ALPACA_SECRET) {
     try {
       return await fetchIntradayChartAlpaca(symbol);
     } catch (err) {
-      console.warn(`[chart] Alpaca misslyckades (${err.message}), faller tillbaka på Yahoo Finance`);
+      console.warn(`[chart] Alpaca misslyckades (${err.message})`);
     }
   }
-  return fetchIntradayChartYahoo(symbol);
+  if (FINNHUB_TOKEN) {
+    return fetchIntradayChartFinnhub(symbol);
+  }
+  throw new Error('Alla diagramkällor misslyckades');
 }
 
 // ─── Fetch news (normalized to { title, link, publisher, time, source }) ──
