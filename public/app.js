@@ -844,7 +844,7 @@ async function renderIntradayChart(symbol) {
 
     dom.detailChart.innerHTML = `
       <div class="chart-header">
-        <span>Intradag (5 min)</span>
+        <span>Intradag (1 min)</span>
         <span class="chart-tooltip">$${lastPrice.toFixed(2)}${timeStr ? '  ' + timeStr : ''}</span>
       </div>`;
     dom.detailChart.style.display = 'flex';

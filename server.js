@@ -202,10 +202,10 @@ async function fetchPriceHistory(symbol, retryAuth = false) {
   return data?.chart?.result?.[0] ?? null;
 }
 
-// ─── Fetch intraday chart (5m interval, 1d range) ────────
+// ─── Fetch intraday chart (1m interval, 1d range) ────────
 async function fetchIntradayChart(symbol, retryAuth = false) {
   const auth = await getYFAuth();
-  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=5m&range=1d&crumb=${encodeURIComponent(auth.crumb)}`;
+  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&crumb=${encodeURIComponent(auth.crumb)}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/', 'Cookie': auth.cookie },
   });
