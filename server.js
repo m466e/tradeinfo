@@ -205,7 +205,7 @@ async function fetchPriceHistory(symbol, retryAuth = false) {
 // ─── Fetch intraday chart (1m interval, 1d range) ────────
 async function fetchIntradayChart(symbol, retryAuth = false) {
   const auth = await getYFAuth();
-  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&crumb=${encodeURIComponent(auth.crumb)}`;
+  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=false&crumb=${encodeURIComponent(auth.crumb)}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/', 'Cookie': auth.cookie },
   });
@@ -647,6 +647,7 @@ app.get('/api/chart/:symbol', async (req, res) => {
     const filtered = timestamps.map((t, i) => ({ t, c: closes[i] })).filter(p => p.c != null);
     const filteredTimestamps = filtered.map(p => p.t);
     const filteredCloses     = filtered.map(p => p.c);
+    console.log(`[chart] ${symbol}: ${timestamps.length} raw → ${filteredCloses.length} non-null points`);
 
     const open = filteredCloses[0] ?? null;
     const high = filteredCloses.length ? Math.max(...filteredCloses) : null;
