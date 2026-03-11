@@ -600,6 +600,7 @@ tr.flash-down { animation: flashRed   0.8s ease-out; }
   display: flex;
   flex-direction: row;
   overflow-x: auto;
+  align-items: stretch;
 }
 
 #detail-left {
@@ -971,14 +972,45 @@ th .sort-arrow {
 
 /* ─── Intraday chart ─────────────────────────────────────── */
 #detail-chart {
-  padding: 0 0 8px 0;
+  flex: 1 1 0;
+  min-width: 160px;
   display: none;
+  flex-direction: column;
+  padding: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+#detail-chart .chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+
+#detail-chart .chart-tooltip {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 80px;
+  text-align: right;
 }
 
 #detail-chart svg {
   display: block;
+  width: 100%;
+  height: 100%;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
+  cursor: crosshair;
+  flex: 1;
+}
+
+#detail-chart .chart-crosshair {
+  pointer-events: none;
 }
 
 /* ─── VWAP row in stop loss panel ────────────────────────── */
