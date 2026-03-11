@@ -246,12 +246,17 @@ async function fetchIntradayChartYahoo(symbol, retryAuth = false) {
   const result = json?.chart?.result?.[0];
   if (!result) throw new Error('Yahoo chart: tomt svar');
   const timestamps = result.timestamp ?? [];
-  const closes     = result.indicators?.quote?.[0]?.close ?? [];
-  const filtered   = timestamps.map((t, i) => ({ t, c: closes[i] })).filter(p => p.c != null);
+  const qi = result.indicators?.quote?.[0] ?? {};
+  const filtered = timestamps.map((t, i) => ({
+    t, c: qi.close?.[i], h: qi.high?.[i], l: qi.low?.[i], v: qi.volume?.[i],
+  })).filter(p => p.c != null);
   return {
     timestamps: filtered.map(p => p.t),
     closes:     filtered.map(p => p.c),
-    open:       result.indicators?.quote?.[0]?.open?.[0] ?? filtered[0]?.c ?? null,
+    highs:      filtered.map(p => p.h ?? p.c),
+    lows:       filtered.map(p => p.l ?? p.c),
+    volumes:    filtered.map(p => p.v ?? 0),
+    open:       qi.open?.[0] ?? filtered[0]?.c ?? null,
     source:     'yahoo',
   };
 }
@@ -287,6 +292,9 @@ async function fetchIntradayChartAlpaca(symbol) {
   return {
     timestamps: bars.map(b => Math.floor(new Date(b.t).getTime() / 1000)),
     closes:     bars.map(b => b.c),
+    highs:      bars.map(b => b.h ?? b.c),
+    lows:       bars.map(b => b.l ?? b.c),
+    volumes:    bars.map(b => b.v ?? 0),
     open:       bars[0]?.o ?? bars[0]?.c ?? null,
     source:     'alpaca',
   };
@@ -505,11 +513,26 @@ function calcRSI(closes, period = 14) {
 }
 
 // ─── VWAP calculation ─────────────────────────────────────
-// Takes intraday data { timestamps, closes } from fetchIntradayChart.
-// Approximates VWAP as mean of intraday closes when per-minute volume is unavailable.
+// True VWAP: Σ(typical_price × volume) / Σ(volume)
+// typical_price = (high + low + close) / 3
+// Falls back to simple mean of closes if volume data is unavailable.
 function calcVWAP(intradayData) {
-  const closes = intradayData?.closes;
+  const { closes, highs, lows, volumes } = intradayData ?? {};
   if (!closes?.length) return null;
+
+  if (volumes?.length === closes.length && highs?.length === closes.length && lows?.length === closes.length) {
+    let numSum = 0, denomSum = 0;
+    for (let i = 0; i < closes.length; i++) {
+      const v = volumes[i];
+      if (!v) continue;
+      const tp = (highs[i] + lows[i] + closes[i]) / 3;
+      numSum   += tp * v;
+      denomSum += v;
+    }
+    if (denomSum > 0) return numSum / denomSum;
+  }
+
+  // Fallback: simple mean
   return closes.reduce((s, c) => s + c, 0) / closes.length;
 }
 
@@ -751,6 +774,7 @@ function normalizeQuote(q) {
     currency: q.currency ?? 'USD',
     quoteType: q.quoteType ?? null,
     timestamp: typeof ts === 'number' ? ts * 1000 : Date.now(),
+    earningsTimestamp: q.earningsTimestamp ?? q.earningsTimestampStart ?? null,
   };
 }
 

@@ -793,6 +793,8 @@ tr.flash-down { animation: flashRed   0.8s ease-out; }
 }
 .detail-item-value.null { color: var(--text-muted); }
 .sl-pct { color: var(--negative); font-size: 10px; margin-left: 3px; }
+.earnings-soon   { font-size: 10px; font-weight: 600; color: #f0883e; margin-left: 4px; }
+.earnings-recent { font-size: 10px; color: var(--text-muted); margin-left: 4px; }
 
 .detail-col--sl {
   padding: 12px 18px;

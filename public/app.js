@@ -1025,10 +1025,23 @@ function renderDetailBody(q, symbol, risk) {
     ].join(''))}
 
     ${col('Övrigt', [
-      item('P/B',     q.priceToBook  !== null ? fmt(q.priceToBook) : '–', q.priceToBook === null),
-      item('Beta',    q.beta         !== null ? fmt(q.beta)        : '–', q.beta        === null),
-      item('Yield',   q.dividendYield ? fmtYield(q.dividendYield)  : '–', !q.dividendYield),
-      item('Bid/Ask', `${bidAsk(q)} / ${bidAsk(q, true)}`),
+      item('P/B',      q.priceToBook  !== null ? fmt(q.priceToBook) : '–', q.priceToBook === null),
+      item('Beta',     q.beta         !== null ? fmt(q.beta)        : '–', q.beta        === null),
+      item('Yield',    q.dividendYield ? fmtYield(q.dividendYield)  : '–', !q.dividendYield),
+      item('Bid/Ask',  `${bidAsk(q)} / ${bidAsk(q, true)}`),
+      item('Earnings', q.earningsTimestamp
+        ? (() => {
+            const d = new Date(q.earningsTimestamp * 1000);
+            const daysAway = Math.round((d - Date.now()) / 86400000);
+            const dateStr = d.toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' });
+            const badge = daysAway >= 0 && daysAway <= 7
+              ? ` <span class="earnings-soon">om ${daysAway}d</span>`
+              : daysAway < 0 && daysAway >= -3
+              ? ` <span class="earnings-recent">nyligen</span>`
+              : '';
+            return dateStr + badge;
+          })()
+        : '–', !q.earningsTimestamp),
     ].join(''))}
   `;
 }
