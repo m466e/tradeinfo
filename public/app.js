@@ -649,9 +649,9 @@ async function openStockDetail(symbol) {
 let _chartData = null;
 let _chartResizeObserver = null;
 
-function buildChartSVG(closes, timestamps, open, containerW) {
+function buildChartSVG(closes, timestamps, open, containerW, containerH) {
   const W    = containerW || 300;
-  const H    = 160;
+  const H    = containerH || 160;
   const PADL = 50;   // space for Y price labels
   const PADR = 6;
   const PADT = 6;
@@ -812,14 +812,15 @@ function attachChartInteraction(closes, timestamps, open) {
 function redrawChart() {
   if (!_chartData) return;
   const { closes, timestamps, open } = _chartData;
-  const w = dom.detailChart.clientWidth - 16; // subtract padding
+  const w = dom.detailChart.clientWidth - 16;   // subtract left+right padding
   if (w < 10) return;
+  const header = dom.detailChart.querySelector('.chart-header');
+  const headerH = header ? header.offsetHeight + 4 : 24; // header + margin-bottom
+  const h = dom.detailChart.clientHeight - headerH - 16; // subtract top+bottom padding
   const svg = dom.detailChart.querySelector('svg');
   if (svg) svg.remove();
-  const header = dom.detailChart.querySelector('.chart-header');
-  dom.detailChart.insertAdjacentHTML('beforeend', buildChartSVG(closes, timestamps, open, w));
+  dom.detailChart.insertAdjacentHTML('beforeend', buildChartSVG(closes, timestamps, open, w, Math.max(h, 80)));
   attachChartInteraction(closes, timestamps, open);
-  // restore tooltip to last price
   const tooltip = dom.detailChart.querySelector('.chart-tooltip');
   if (tooltip) tooltip.textContent = `$${closes.at(-1).toFixed(2)}`;
 }

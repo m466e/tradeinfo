@@ -1001,8 +1001,9 @@ th .sort-arrow {
 
 #detail-chart svg {
   display: block;
+  flex: 1 1 0;
   width: 100%;
-  height: auto;
+  min-height: 0;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   cursor: crosshair;
