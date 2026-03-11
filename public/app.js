@@ -676,7 +676,7 @@ function buildChartSVG(closes, timestamps, open, containerW, containerH) {
     const nice  = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
     return nice * mag;
   }
-  const step   = niceStep(range, 3);
+  const step   = niceStep(range, Math.max(3, Math.floor(chartH / 25)));
   const yStart = Math.ceil(minVal / step) * step;
   const yTicks = [];
   for (let v = yStart; v <= maxVal + step * 0.01; v = parseFloat((v + step).toFixed(10))) {
