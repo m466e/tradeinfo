@@ -46,6 +46,8 @@ const dom = {
   marketLabel:      $('market-label'),
   detailBody:       $('detail-body'),
   detailArticles:   $('detail-articles'),
+  detailStoploss:   $('detail-stoploss'),
+  detailRisk:       $('detail-risk'),
 };
 
 // ─── Formatting helpers ────────────────────────────────────
@@ -458,19 +460,19 @@ async function openStockDetail(symbol) {
 }
 
 function riskGaugeSVG(score, color) {
-  const r = 24, cx = 32, cy = 32;
+  const r = 36, cx = 50, cy = 50;
   const circ = 2 * Math.PI * r;
   const maxArc = circ * 0.75;
   const fillArc = (score / 100) * maxArc;
   const rot = `rotate(135,${cx},${cy})`;
-  return `<svg width="64" height="64" viewBox="0 0 64 64">
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--bg-tertiary)" stroke-width="7"
+  return `<svg width="100" height="100" viewBox="0 0 100 100">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--bg-tertiary)" stroke-width="9"
       stroke-dasharray="${maxArc.toFixed(1)} ${(circ - maxArc).toFixed(1)}"
       stroke-linecap="round" transform="${rot}"/>
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="7"
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="9"
       stroke-dasharray="${fillArc.toFixed(1)} ${(circ - fillArc).toFixed(1)}"
       stroke-linecap="round" transform="${rot}"/>
-    <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="15" font-weight="700"
+    <text x="${cx}" y="${cy + 7}" text-anchor="middle" font-size="20" font-weight="700"
       fill="#e6edf3" font-family="'SF Mono',Consolas,monospace">${score}</text>
   </svg>`;
 }
@@ -522,15 +524,29 @@ function renderDetailBody(q, symbol, risk) {
       <span class="detail-item-value${isNull ? ' null' : ''}">${value}</span>
     </div>`;
   }
-  function col(title, items) {
-    return `<div class="detail-col"><div class="detail-col-title">${title}</div>${items}</div>`;
+  function col(title, items, cls = '') {
+    return `<div class="detail-col${cls ? ' ' + cls : ''}"><div class="detail-col-title">${title}</div>${items}</div>`;
   }
 
-  let riskHtml;
   if (risk === 'loading') {
-    riskHtml = `<div class="risk-section"><div class="risk-loading"></div><div class="risk-label-text">Analyserar…</div></div>`;
+    dom.detailRisk.innerHTML = `<div class="risk-section"><div class="risk-loading"></div><div class="risk-label-text">Analyserar…</div></div>`;
   } else if (risk) {
-    riskHtml = `<div class="risk-section">
+    const rec = risk.recommendation;
+    const recHtml = rec ? `
+      <div class="risk-divider"></div>
+      <div class="rec-badge" style="color:${rec.color};border-color:${rec.color}">${rec.recommendation}</div>
+      <div class="rec-label">${escHtml(rec.label)}</div>
+      <div class="rec-counts">
+        <span class="rec-buy">▲ ${rec.buyCount} köp</span>
+        <span class="rec-sell">▼ ${rec.sellCount} sälj</span>
+      </div>
+      <div class="rec-signals">
+        ${rec.signals.map(s => `<div class="rec-signal ${s.score > 0.1 ? 'pos' : s.score < -0.1 ? 'neg' : 'neu'}">
+          <span class="rec-signal-dot"></span>${escHtml(s.label)}
+        </div>`).join('')}
+      </div>` : '';
+
+    dom.detailRisk.innerHTML = `<div class="risk-section">
       ${riskGaugeSVG(risk.score, risk.color)}
       <div class="risk-label-text" style="color:${risk.color}">${risk.label}</div>
       <div class="risk-detail">
@@ -539,16 +555,20 @@ function renderDetailBody(q, symbol, risk) {
         <span>${risk.priceRisk.volumeDetail}</span>
         <span>Nyheter: ${risk.newsRisk.detail}</span>
       </div>
+      ${recHtml}
     </div>`;
+  } else if (symbol) {
+    dom.detailRisk.innerHTML = `<div class="risk-section risk-na"><span class="risk-label-text">Risk<br>ej tillgänglig</span></div>`;
   } else {
-    riskHtml = `<div class="risk-section risk-na"><span class="risk-label-text">Risk<br>ej tillgänglig</span></div>`;
+    dom.detailRisk.innerHTML = '';
   }
 
   if (!q) {
     const name = symbol ? (state.allSymbols.find(s => s.symbol === symbol)?.name ?? symbol) : null;
     renderArticles(risk);
+    dom.detailStoploss.innerHTML = '';
     dom.detailBody.innerHTML = symbol
-      ? riskHtml + `<div class="detail-main"><span class="detail-symbol">${escHtml(symbol)}</span><span class="detail-name">${escHtml(name)}</span><span class="detail-price">–</span></div>`
+      ? `<div class="detail-main"><span class="detail-symbol">${escHtml(symbol)}</span><span class="detail-name">${escHtml(name)}</span><span class="detail-price">–</span></div>`
       : '<div class="detail-placeholder">Klicka på en rad i listan för att visa detaljer</div>';
     return;
   }
@@ -557,7 +577,20 @@ function renderDetailBody(q, symbol, risk) {
 
   renderArticles(risk);
 
-  dom.detailBody.innerHTML = riskHtml + `
+  if (risk?.stopLoss) {
+    dom.detailStoploss.innerHTML = `<div class="detail-col detail-col--sl">
+      <div class="detail-col-title">Stop Loss ▼</div>
+      ${item('ATR (14d)',     fmtPrice(risk.stopLoss.atr, q.currency))}
+      ${item('Tight (1.5×)',  `${fmtPrice(risk.stopLoss.tight.price,    q.currency)} <span class="sl-pct">${risk.stopLoss.tight.pct}%</span>`)}
+      ${item('Standard (2×)', `${fmtPrice(risk.stopLoss.standard.price, q.currency)} <span class="sl-pct">${risk.stopLoss.standard.pct}%</span>`)}
+      ${item('Bred (3×)',     `${fmtPrice(risk.stopLoss.wide.price,     q.currency)} <span class="sl-pct">${risk.stopLoss.wide.pct}%</span>`)}
+      ${item('Swing Low',     `${fmtPrice(risk.stopLoss.swingLow.price, q.currency)} <span class="sl-pct">${risk.stopLoss.swingLow.pct}%</span>`)}
+    </div>`;
+  } else {
+    dom.detailStoploss.innerHTML = '';
+  }
+
+  dom.detailBody.innerHTML = `
     <div class="detail-main">
       <span class="detail-symbol">${escHtml(q.symbol)}</span>
       <span class="detail-name" title="${escHtml(q.name)}">${escHtml(q.name)}</span>

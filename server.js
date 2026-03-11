@@ -146,7 +146,7 @@ async function fetchYahooQuotes(symbols) {
 // ─── Fetch 5-day price history ────────────────────────────
 async function fetchPriceHistory(symbol) {
   const auth = await getYFAuth();
-  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d&crumb=${encodeURIComponent(auth.crumb)}`;
+  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1mo&crumb=${encodeURIComponent(auth.crumb)}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/', 'Cookie': auth.cookie },
   });
@@ -264,6 +264,48 @@ function calcPriceRisk(chartResult) {
   };
 }
 
+function calcStopLoss(chartResult) {
+  const q      = chartResult?.indicators?.quote?.[0];
+  const closes = q?.close  ?? [];
+  const highs  = q?.high   ?? [];
+  const lows   = q?.low    ?? [];
+
+  // Align: keep only indices where all three are non-null
+  const valid = closes.map((c, i) => ({ c, h: highs[i], l: lows[i] }))
+                       .filter(v => v.c != null && v.h != null && v.l != null);
+
+  if (valid.length < 3) return null;
+
+  const currentPrice = valid.at(-1).c;
+  const N = Math.min(14, valid.length - 1);
+  const slice = valid.slice(-N - 1);      // N+1 bars to compute N true ranges
+
+  // Average True Range over N periods
+  let atrSum = 0;
+  for (let i = 1; i <= N; i++) {
+    const { h, l } = slice[i];
+    const prev = slice[i - 1].c;
+    atrSum += Math.max(h - l, Math.abs(h - prev), Math.abs(l - prev));
+  }
+  const atr = atrSum / N;
+
+  // Recent swing low: lowest low over last 10 bars
+  const swingLow = Math.min(...valid.slice(-10).map(v => v.l));
+
+  function stop(price) {
+    return { price, pct: +((price - currentPrice) / currentPrice * 100).toFixed(2) };
+  }
+
+  return {
+    atr,
+    currentPrice,
+    tight:    stop(currentPrice - 1.5 * atr),
+    standard: stop(currentPrice - 2.0 * atr),
+    wide:     stop(currentPrice - 3.0 * atr),
+    swingLow: stop(swingLow),
+  };
+}
+
 function calcNewsRisk(items) {
   if (!items?.length) return { score: 50, detail: '0 nyheter', positive: [], negative: [] };
   let totalPos = 0, totalNeg = 0;
@@ -286,6 +328,134 @@ function calcNewsRisk(items) {
   const score = Math.round(Math.max(5, Math.min(95, 50 + sentiment * 40)));
   const label = sentiment < -0.2 ? 'positivt' : sentiment > 0.2 ? 'negativt' : 'neutralt';
   return { score, detail: `${items.length} art., ${label}`, positive, negative };
+}
+
+// ─── RSI helper ───────────────────────────────────────────
+function calcRSI(closes, period = 14) {
+  if (closes.length < period + 1) return null;
+  let gains = 0, losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) gains += diff; else losses -= diff;
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  return 100 - (100 / (1 + avgGain / avgLoss));
+}
+
+// ─── Buy/Sell recommendation ──────────────────────────────
+function calcRecommendation(chartResult, quote, newsRisk) {
+  const q      = chartResult?.indicators?.quote?.[0];
+  const closes = (q?.close ?? []).filter(v => v != null);
+  const signals = [];
+
+  // 1. RSI (14-period) — oversold = köp, overköpt = sälj
+  const rsi = calcRSI(closes, 14);
+  if (rsi !== null) {
+    const rv = rsi < 30 ? 1 : rsi < 45 ? 0.5 : rsi < 55 ? 0 : rsi < 70 ? -0.5 : -1;
+    const rl = rsi < 30 ? `RSI ${rsi.toFixed(0)} – översålt` : rsi < 45 ? `RSI ${rsi.toFixed(0)} – lågt`
+             : rsi < 55 ? `RSI ${rsi.toFixed(0)} – neutralt` : rsi < 70 ? `RSI ${rsi.toFixed(0)} – högt`
+             : `RSI ${rsi.toFixed(0)} – överköpt`;
+    signals.push({ name: 'RSI', score: rv, label: rl });
+  }
+
+  // 2. 5-dagars momentum
+  if (closes.length >= 6) {
+    const mom = (closes.at(-1) - closes.at(-6)) / closes.at(-6);
+    const mv = mom > 0.05 ? 1 : mom > 0.02 ? 0.5 : mom > -0.02 ? 0 : mom > -0.05 ? -0.5 : -1;
+    const sign = mom >= 0 ? '+' : '';
+    signals.push({ name: 'Momentum 5d', score: mv, label: `${sign}${(mom * 100).toFixed(1)}% (5 dagar)` });
+  }
+
+  // 3. SMA20 (beräknad från chartdata)
+  if (closes.length >= 5) {
+    const n = Math.min(20, closes.length);
+    const sma20 = closes.slice(-n).reduce((a, b) => a + b, 0) / n;
+    const diff  = (closes.at(-1) - sma20) / sma20;
+    const sv    = diff > 0.05 ? 0.5 : diff > 0.01 ? 0.25 : diff > -0.01 ? 0 : diff > -0.05 ? -0.25 : -0.5;
+    const dir   = diff >= 0 ? 'över' : 'under';
+    signals.push({ name: 'SMA20', score: sv, label: `${Math.abs(diff * 100).toFixed(1)}% ${dir} SMA20` });
+  }
+
+  // 4. MA50 vs MA200 (Golden/Death cross) — från quote-data
+  if (quote?.ma50 && quote?.ma200) {
+    const cross = (quote.ma50 - quote.ma200) / quote.ma200;
+    const cv    = cross > 0.02 ? 0.75 : cross > -0.02 ? 0 : -0.75;
+    const cl    = cross > 0.02 ? 'Gyllene kors (SMA50 > SMA200)' : cross > -0.02 ? 'SMA50 ≈ SMA200' : 'Dödskors (SMA50 < SMA200)';
+    signals.push({ name: 'MA-kors', score: cv, label: cl });
+  }
+
+  // 5. Pris vs SMA50 — från quote
+  if (quote?.ma50 && quote?.price) {
+    const diff = (quote.price - quote.ma50) / quote.ma50;
+    const sv   = diff > 0.05 ? 0.5 : diff > 0 ? 0.25 : diff > -0.05 ? -0.25 : -0.5;
+    const dir  = diff >= 0 ? 'över' : 'under';
+    signals.push({ name: 'Pris/SMA50', score: sv, label: `${Math.abs(diff * 100).toFixed(1)}% ${dir} SMA50` });
+  }
+
+  // 6. Position inom 52-veckorsintervall
+  if (quote?.week52High && quote?.week52Low && quote?.price) {
+    const range = quote.week52High - quote.week52Low;
+    if (range > 0) {
+      const pos = (quote.price - quote.week52Low) / range;
+      const pv  = pos < 0.2 ? 1 : pos < 0.4 ? 0.5 : pos < 0.6 ? 0 : pos < 0.8 ? -0.5 : -1;
+      const pl  = pos < 0.2 ? `Nära 52v lägsta (${(pos * 100).toFixed(0)}%)`
+                : pos < 0.4 ? `Lägre del av 52v (${(pos * 100).toFixed(0)}%)`
+                : pos < 0.6 ? `Mitt i 52v-intervall (${(pos * 100).toFixed(0)}%)`
+                : pos < 0.8 ? `Övre del av 52v (${(pos * 100).toFixed(0)}%)`
+                : `Nära 52v högsta (${(pos * 100).toFixed(0)}%)`;
+      signals.push({ name: '52v-position', score: pv, label: pl });
+    }
+  }
+
+  // 7. P/E (trailing)
+  if (quote?.pe != null && quote.pe > 0) {
+    const pev = quote.pe < 10 ? 1 : quote.pe < 20 ? 0.5 : quote.pe < 30 ? 0 : quote.pe < 50 ? -0.5 : -1;
+    const pel = quote.pe < 10 ? `P/E ${quote.pe.toFixed(1)} – lågt`
+              : quote.pe < 30 ? `P/E ${quote.pe.toFixed(1)}`
+              : `P/E ${quote.pe.toFixed(1)} – högt`;
+    signals.push({ name: 'P/E', score: pev, label: pel });
+  } else if (quote?.pe != null && quote.pe < 0) {
+    signals.push({ name: 'P/E', score: -0.5, label: 'P/E negativt (förlust)' });
+  }
+
+  // 8. Forward P/E vs trailing (earnings-förbättring)
+  if (quote?.forwardPE && quote?.pe && quote.pe > 0 && quote.forwardPE > 0) {
+    const imp = (quote.pe - quote.forwardPE) / quote.pe;
+    const fv  = imp > 0.15 ? 0.75 : imp > 0.05 ? 0.25 : imp > -0.1 ? 0 : -0.5;
+    const fl  = imp > 0.05 ? `Fwd P/E ${quote.forwardPE.toFixed(1)} – vinstökning väntas`
+              : imp < -0.1 ? `Fwd P/E ${quote.forwardPE.toFixed(1)} – vinstminskning väntas`
+              : `Fwd P/E ${quote.forwardPE.toFixed(1)}`;
+    signals.push({ name: 'Fwd P/E', score: fv, label: fl });
+  }
+
+  // 9. Nyhetssentiment
+  if (newsRisk && (newsRisk.positive?.length || newsRisk.negative?.length)) {
+    const sentScore = (50 - newsRisk.score) / 50; // -1 till +1
+    const nv = Math.max(-1, Math.min(1, sentScore));
+    const nl = nv > 0.3 ? `Positiva nyheter (${newsRisk.positive.length} art.)`
+             : nv < -0.3 ? `Negativa nyheter (${newsRisk.negative.length} art.)`
+             : `Neutrala nyheter`;
+    signals.push({ name: 'Nyheter', score: nv, label: nl });
+  }
+
+  if (signals.length === 0) return null;
+
+  const avg = signals.reduce((s, x) => s + x.score, 0) / signals.length;
+
+  let recommendation, color, label;
+  if      (avg >  0.4)  { recommendation = 'KÖP';  color = '#3fb950'; label = 'Stark köpsignal';  }
+  else if (avg >  0.1)  { recommendation = 'KÖP';  color = '#85c88a'; label = 'Svag köpsignal';   }
+  else if (avg > -0.1)  { recommendation = 'HÅLL'; color = '#d29922'; label = 'Neutral – avvakta'; }
+  else if (avg > -0.4)  { recommendation = 'SÄLJ'; color = '#f0883e'; label = 'Svag säljsignal';  }
+  else                  { recommendation = 'SÄLJ'; color = '#f85149'; label = 'Stark säljsignal';  }
+
+  const buyCount  = signals.filter(s => s.score >  0.1).length;
+  const sellCount = signals.filter(s => s.score < -0.1).length;
+  const top = [...signals].sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 4);
+
+  return { recommendation, color, label, avg: +avg.toFixed(2), buyCount, sellCount, signals: top };
 }
 
 function riskMeta(score) {
@@ -380,12 +550,14 @@ app.get('/api/risk/:symbol', async (req, res) => {
   if (cached && (Date.now() - cached.cachedAt) < RISK_TTL) return res.json(cached.data);
 
   try {
-    const [chartResult, yahooItems, googleItems, redditItems] = await Promise.all([
+    const [chartResult, yahooItems, googleItems, redditItems, quoteResults] = await Promise.all([
       fetchPriceHistory(symbol).catch(() => null),
       fetchYahooNews(symbol).catch(() => []),
       fetchGoogleNews(symbol).catch(() => []),
       fetchRedditPosts(symbol).catch(() => []),
+      fetchYahooQuotes([symbol]).catch(() => []),
     ]);
+    const quote = quoteResults.length > 0 ? normalizeQuote(quoteResults[0]) : null;
     // Build a list of terms to match against: symbol + significant name words
     const companyName = symbolCache.data?.find(s => s.symbol === symbol)?.name ?? '';
     const nameWords = companyName
@@ -400,11 +572,13 @@ app.get('/api/risk/:symbol', async (req, res) => {
       return terms.some(t => text.includes(t));
     });
 
-    const priceRisk = calcPriceRisk(chartResult);
-    const newsRisk  = calcNewsRisk(allItems);
+    const priceRisk      = calcPriceRisk(chartResult);
+    const newsRisk       = calcNewsRisk(allItems);
+    const stopLoss       = calcStopLoss(chartResult);
+    const recommendation = calcRecommendation(chartResult, quote, newsRisk);
     const score = Math.round(priceRisk.score * 0.55 + newsRisk.score * 0.45);
     const meta  = riskMeta(score);
-    const data  = { symbol, score, ...meta, priceRisk, newsRisk };
+    const data  = { symbol, score, ...meta, priceRisk, newsRisk, stopLoss, recommendation };
     riskCache.set(symbol, { data, cachedAt: Date.now() });
     res.json(data);
   } catch (err) {

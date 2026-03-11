@@ -47,16 +47,8 @@
       </div>
     </aside>
 
-    <!-- RIGHT PANEL: Detail + Watchlist -->
+    <!-- RIGHT PANEL: Watchlist + Detail -->
     <section id="watchlist-panel">
-      <!-- Detail section (always visible) -->
-      <div id="detail-panel">
-        <div id="detail-body">
-          <div class="detail-placeholder">Klicka på en rad i listan för att visa detaljer</div>
-        </div>
-        <div id="detail-articles" style="display:none"></div>
-      </div>
-
       <div class="watchlist-header">
         <h2>Min bevakningslista</h2>
         <span id="watchlist-count" class="count-badge">0 aktier</span>
@@ -101,6 +93,20 @@
             </tbody>
           </table>
         </div>
+      </div>
+
+      <!-- Detail section (below watchlist) -->
+      <div id="detail-panel">
+        <div class="detail-top">
+          <div id="detail-left">
+            <div id="detail-body">
+              <div class="detail-placeholder">Klicka på en rad i listan för att visa detaljer</div>
+            </div>
+          </div>
+          <div id="detail-stoploss"></div>
+          <div id="detail-risk"></div>
+        </div>
+        <div id="detail-articles" style="display:none"></div>
       </div>
 
       <div id="status-bar">
