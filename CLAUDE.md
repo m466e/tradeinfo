@@ -70,12 +70,21 @@ API endpoints:
 - Mousemove/click: vertical crosshair + price/time tooltip
 - `_chartResizeObserver` disconnected on symbol change
 
-**Recommendation signals** (10 factors, averaged -1 to +1):
-RSI (14), 5-day momentum, SMA20, MA50/200 cross, price vs SMA50, 52-week position, P/E, forward P/E, news sentiment, VWAP → KÖP / HÅLL / SÄLJ
+**Recommendation signals** (15 factors, averaged -1 to +1, weighted by `signalReliabilityMultiplier`):
+1. RSI (14) 2. 5-day momentum 3. SMA20 4. MA50/200 cross 5. Price vs SMA50 6. 52-week position 7. P/E 8. Forward P/E 9. News sentiment 10. VWAP (intraday mean) 11. Volume ratio 12. Day range position 13. Day trend (gap + from open) 14. PEG approximation 15. P/B (skipped for marketCap > 500B)
+
+`signalReliabilityMultiplier(marketCap)`: mega-cap 1.2×, large 1.0×, mid 0.85×, small 0.70×, micro 0.5×
+
+`calcPriceRisk` also adds bid-ask spread component (+5/10/20 pts for illiquid quotes).
 
 **Price alerts** (`state.alerts`, localStorage `tradeinfo_alerts`):
 - Bell button per watchlist row opens modal with above/below thresholds
 - `checkAlerts()` called on every quote refresh, triggers Web Notifications API on crossings
+
+**Sidebar toggle:**
+- `#sidebar-toggle` button positioned absolutely at the sidebar/main boundary (`left: 300px`, transitions to `0px`)
+- Toggling adds/removes `sidebar-hidden` class on `<main>`, which sets `grid-template-columns: 0px 1fr`
+- Sidebar hidden by default on page load
 
 **Data flow:** Browser → Express API → Yahoo Finance v7 / Alpaca / NASDAQ Trader / Google News / Reddit → normalize → JSON → frontend state → table + detail render
 
