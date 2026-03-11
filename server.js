@@ -37,8 +37,31 @@ const NEGATIVE_WORDS = [
   'class action','headwinds','challenges','downside','below expectations',
 ];
 
-// ─── Risk cache ───────────────────────────────────────────
-const riskCache = new Map();
+// ─── LRU Cache ────────────────────────────────────────────
+class LRUCache {
+  constructor(max) {
+    this.max = max;
+    this.cache = new Map();
+  }
+  get(key) {
+    if (!this.cache.has(key)) return undefined;
+    const val = this.cache.get(key);
+    this.cache.delete(key);
+    this.cache.set(key, val);
+    return val;
+  }
+  set(key, val) {
+    if (this.cache.has(key)) this.cache.delete(key);
+    else if (this.cache.size >= this.max) {
+      this.cache.delete(this.cache.keys().next().value);
+    }
+    this.cache.set(key, val);
+  }
+  has(key) { return this.cache.has(key); }
+}
+
+// ─── Risk cache (LRU, max 50 entries) ────────────────────
+const riskCache = new LRUCache(50);
 const RISK_TTL = 15 * 60 * 1000;
 
 async function getYFAuth() {
@@ -71,6 +94,21 @@ async function getYFAuth() {
   yfAuth = { crumb, cookie, fetchedAt: now };
   console.log(`Yahoo Finance auth refreshed. Crumb: ${crumb.slice(0, 8)}...`);
   return yfAuth;
+}
+
+// ─── Auth with exponential backoff retry ─────────────────
+async function getYFAuthWithRetry(maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      yfAuth = { crumb: null, cookie: null, fetchedAt: 0 };
+      return await getYFAuth();
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      const delay = 1000 * 2 ** (attempt - 1);
+      console.warn(`Auth attempt ${attempt} failed, retrying in ${delay}ms:`, err.message);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
 }
 
 // ─── In-memory cache ──────────────────────────────────────
@@ -112,7 +150,8 @@ async function fetchNasdaqSymbols() {
 }
 
 // ─── Fetch quotes from Yahoo Finance v7 ──────────────────
-async function fetchYahooQuotes(symbols) {
+// retryAuth flag prevents infinite recursion
+async function fetchYahooQuotes(symbols, retryAuth = false) {
   const auth = await getYFAuth();
   const symbolStr = symbols.join(',');
 
@@ -128,8 +167,10 @@ async function fetchYahooQuotes(symbols) {
   });
 
   if (res.status === 401 || res.status === 403) {
-    yfAuth = { crumb: null, cookie: null, fetchedAt: 0 };
-    return fetchYahooQuotes(symbols);
+    if (retryAuth) throw new Error(`Yahoo Finance auth failed after retry: ${res.status}`);
+    console.warn(`Quote fetch got ${res.status}, refreshing auth with retry...`);
+    await getYFAuthWithRetry();
+    return fetchYahooQuotes(symbols, true);
   }
 
   if (!res.ok) {
@@ -143,18 +184,38 @@ async function fetchYahooQuotes(symbols) {
   return results;
 }
 
-// ─── Fetch 5-day price history ────────────────────────────
-async function fetchPriceHistory(symbol) {
+// ─── Fetch 1-month daily price history ───────────────────
+async function fetchPriceHistory(symbol, retryAuth = false) {
   const auth = await getYFAuth();
   const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1mo&crumb=${encodeURIComponent(auth.crumb)}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/', 'Cookie': auth.cookie },
   });
   if (res.status === 401 || res.status === 403) {
-    yfAuth = { crumb: null, cookie: null, fetchedAt: 0 };
-    return fetchPriceHistory(symbol);
+    if (retryAuth) throw new Error(`Price history auth failed after retry: ${res.status}`);
+    console.warn(`Price history got ${res.status}, refreshing auth with retry...`);
+    await getYFAuthWithRetry();
+    return fetchPriceHistory(symbol, true);
   }
   if (!res.ok) throw new Error(`Chart API: ${res.status}`);
+  const data = await res.json();
+  return data?.chart?.result?.[0] ?? null;
+}
+
+// ─── Fetch intraday chart (5m interval, 1d range) ────────
+async function fetchIntradayChart(symbol, retryAuth = false) {
+  const auth = await getYFAuth();
+  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=5m&range=1d&crumb=${encodeURIComponent(auth.crumb)}`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/', 'Cookie': auth.cookie },
+  });
+  if (res.status === 401 || res.status === 403) {
+    if (retryAuth) throw new Error(`Intraday chart auth failed after retry: ${res.status}`);
+    console.warn(`Intraday chart got ${res.status}, refreshing auth with retry...`);
+    await getYFAuthWithRetry();
+    return fetchIntradayChart(symbol, true);
+  }
+  if (!res.ok) throw new Error(`Intraday chart API: ${res.status}`);
   const data = await res.json();
   return data?.chart?.result?.[0] ?? null;
 }
@@ -344,6 +405,26 @@ function calcRSI(closes, period = 14) {
   return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
+// ─── VWAP calculation ─────────────────────────────────────
+function calcVWAP(chartResult) {
+  const q = chartResult?.indicators?.quote?.[0];
+  if (!q) return null;
+  let numSum = 0, denomSum = 0;
+  const len = Math.min(
+    q.close?.length ?? 0,
+    q.high?.length  ?? 0,
+    q.low?.length   ?? 0,
+    q.volume?.length ?? 0
+  );
+  for (let i = 0; i < len; i++) {
+    if (q.close[i] == null || q.high[i] == null || q.low[i] == null || q.volume[i] == null) continue;
+    const tp = (q.high[i] + q.low[i] + q.close[i]) / 3;
+    numSum   += tp * q.volume[i];
+    denomSum += q.volume[i];
+  }
+  return denomSum > 0 ? numSum / denomSum : null;
+}
+
 // ─── Buy/Sell recommendation ──────────────────────────────
 function calcRecommendation(chartResult, quote, newsRisk) {
   const q      = chartResult?.indicators?.quote?.[0];
@@ -440,6 +521,15 @@ function calcRecommendation(chartResult, quote, newsRisk) {
     signals.push({ name: 'Nyheter', score: nv, label: nl });
   }
 
+  // 10. VWAP-signal
+  const vwap = calcVWAP(chartResult);
+  if (vwap !== null && quote?.price) {
+    const diff = (quote.price - vwap) / vwap;
+    const vv   = diff > 0.03 ? 0.5 : diff > 0.005 ? 0.25 : diff > -0.005 ? 0 : diff > -0.03 ? -0.25 : -0.5;
+    const dir  = diff >= 0 ? 'över' : 'under';
+    signals.push({ name: 'VWAP', score: vv, label: `${Math.abs(diff * 100).toFixed(1)}% ${dir} VWAP` });
+  }
+
   if (signals.length === 0) return null;
 
   const avg = signals.reduce((s, x) => s + x.score, 0) / signals.length;
@@ -455,7 +545,7 @@ function calcRecommendation(chartResult, quote, newsRisk) {
   const sellCount = signals.filter(s => s.score < -0.1).length;
   const top = [...signals].sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 4);
 
-  return { recommendation, color, label, avg: +avg.toFixed(2), buyCount, sellCount, signals: top };
+  return { recommendation, color, label, avg: +avg.toFixed(2), buyCount, sellCount, signals: top, vwap };
 }
 
 function riskMeta(score) {
@@ -542,6 +632,33 @@ app.get('/api/quote', async (req, res) => {
   }
 });
 
+// GET /api/chart/:symbol  — intraday 5m data for SVG chart
+app.get('/api/chart/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const result = await fetchIntradayChart(symbol);
+    if (!result) return res.status(502).json({ error: 'No chart data returned' });
+
+    const timestamps = result.timestamp ?? [];
+    const q = result.indicators?.quote?.[0] ?? {};
+    const closes = q.close ?? [];
+
+    // Filter out null data points, keeping timestamp and close aligned
+    const filtered = timestamps.map((t, i) => ({ t, c: closes[i] })).filter(p => p.c != null);
+    const filteredTimestamps = filtered.map(p => p.t);
+    const filteredCloses     = filtered.map(p => p.c);
+
+    const open = filteredCloses[0] ?? null;
+    const high = filteredCloses.length ? Math.max(...filteredCloses) : null;
+    const low  = filteredCloses.length ? Math.min(...filteredCloses) : null;
+
+    res.json({ timestamps: filteredTimestamps, closes: filteredCloses, open, high, low });
+  } catch (err) {
+    console.error(`Intraday chart error ${symbol}:`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // GET /api/risk/:symbol
 app.get('/api/risk/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
@@ -575,10 +692,11 @@ app.get('/api/risk/:symbol', async (req, res) => {
     const priceRisk      = calcPriceRisk(chartResult);
     const newsRisk       = calcNewsRisk(allItems);
     const stopLoss       = calcStopLoss(chartResult);
+    const vwap           = calcVWAP(chartResult);
     const recommendation = calcRecommendation(chartResult, quote, newsRisk);
     const score = Math.round(priceRisk.score * 0.55 + newsRisk.score * 0.45);
     const meta  = riskMeta(score);
-    const data  = { symbol, score, ...meta, priceRisk, newsRisk, stopLoss, recommendation };
+    const data  = { symbol, score, ...meta, priceRisk, newsRisk, stopLoss, vwap, recommendation };
     riskCache.set(symbol, { data, cachedAt: Date.now() });
     res.json(data);
   } catch (err) {

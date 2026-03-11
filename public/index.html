@@ -20,6 +20,12 @@
       <div class="refresh-info">
         <span id="last-refresh">Ej uppdaterad</span>
         <button id="refresh-btn" class="btn-icon" title="Uppdatera nu">&#8635;</button>
+        <select id="refresh-interval" class="refresh-select" title="Uppdateringsintervall">
+          <option value="15">15s</option>
+          <option value="30" selected>30s</option>
+          <option value="60">60s</option>
+          <option value="0">Manuell</option>
+        </select>
         <span class="countdown-wrap">om <span id="countdown">30</span>s</span>
       </div>
     </div>
@@ -67,23 +73,23 @@
               <tr>
                 <th class="col-symbol">Symbol</th>
                 <th class="col-name">Namn</th>
-                <th class="col-price">Pris</th>
-                <th class="col-change">Förändring</th>
-                <th class="col-changepct">%</th>
+                <th class="col-price sortable" data-sort-key="price">Pris</th>
+                <th class="col-change sortable" data-sort-key="change">Förändring</th>
+                <th class="col-changepct sortable" data-sort-key="changePct">%</th>
                 <th class="col-open">Öppning</th>
-                <th class="col-high">Dag H</th>
-                <th class="col-low">Dag L</th>
-                <th class="col-volume">Volym</th>
+                <th class="col-high sortable" data-sort-key="dayHigh">Dag H</th>
+                <th class="col-low sortable" data-sort-key="dayLow">Dag L</th>
+                <th class="col-volume sortable" data-sort-key="volume">Volym</th>
                 <th class="col-avgvol">Snitt Vol.</th>
-                <th class="col-mktcap">Mkt Cap</th>
-                <th class="col-pe">P/E</th>
-                <th class="col-forwardpe">Fwd P/E</th>
-                <th class="col-eps">EPS</th>
+                <th class="col-mktcap sortable" data-sort-key="marketCap">Mkt Cap</th>
+                <th class="col-pe sortable" data-sort-key="pe">P/E</th>
+                <th class="col-forwardpe sortable" data-sort-key="forwardPE">Fwd P/E</th>
+                <th class="col-eps sortable" data-sort-key="eps">EPS</th>
                 <th class="col-52h">52v Hög</th>
                 <th class="col-52l">52v Låg</th>
-                <th class="col-div">Utd. Yield</th>
-                <th class="col-beta">Beta</th>
-                <th class="col-pb">P/B</th>
+                <th class="col-div sortable" data-sort-key="dividendYield">Utd. Yield</th>
+                <th class="col-beta sortable" data-sort-key="beta">Beta</th>
+                <th class="col-pb sortable" data-sort-key="priceToBook">P/B</th>
                 <th class="col-bid">Köp</th>
                 <th class="col-ask">Sälj</th>
                 <th class="col-action"></th>
@@ -102,6 +108,7 @@
             <div id="detail-body">
               <div class="detail-placeholder">Klicka på en rad i listan för att visa detaljer</div>
             </div>
+            <div id="detail-chart"></div>
           </div>
           <div id="detail-stoploss"></div>
           <div id="detail-risk"></div>
@@ -114,6 +121,26 @@
       </div>
     </section>
   </main>
+
+  <!-- Alert modal -->
+  <div id="alert-modal" class="alert-modal" style="display:none">
+    <div class="alert-modal-box">
+      <div class="alert-modal-title">Prisnotifiering – <span id="alert-modal-symbol"></span></div>
+      <div class="alert-modal-row">
+        <label>Notifiera över</label>
+        <input type="number" id="alert-above" class="alert-input" placeholder="–" step="0.01">
+      </div>
+      <div class="alert-modal-row">
+        <label>Notifiera under</label>
+        <input type="number" id="alert-below" class="alert-input" placeholder="–" step="0.01">
+      </div>
+      <div class="alert-modal-actions">
+        <button id="alert-save-btn" class="btn-primary">Spara</button>
+        <button id="alert-clear-btn" class="btn-secondary">Rensa</button>
+        <button id="alert-cancel-btn" class="btn-secondary">Avbryt</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

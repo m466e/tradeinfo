@@ -12,6 +12,7 @@ const state = {
   watchlist: [],        // ['AAPL', 'MSFT', ...]
   quotes: {},           // { AAPL: { price, change, ... } }
   prevQuotes: {},       // previous prices for flash detection
+  alerts: {},           // { AAPL: { above: 200, below: 150 } }
   searchQuery: '',
   visibleCount: 60,     // how many list items to show
   PAGE_SIZE: 60,
@@ -22,6 +23,10 @@ const state = {
   symbolsLoaded: false,
   detailSymbol: null,   // currently open detail panel
   currentRisk: null,    // risk data for open detail
+  sortKey: null,        // column key for watchlist sort
+  sortDir: -1,          // -1 = descending, 1 = ascending
+  alertModalSymbol: null,
+  refreshInterval: 30,  // seconds; 0 = manual
 };
 
 // ─── DOM refs ─────────────────────────────────────────────
@@ -39,15 +44,25 @@ const dom = {
   watchlistContainer: $('watchlist-container'),
   watchlistCount:   $('watchlist-count'),
   refreshBtn:       $('refresh-btn'),
+  refreshInterval:  $('refresh-interval'),
   lastRefresh:      $('last-refresh'),
   countdown:        $('countdown'),
+  countdownWrap:    document.querySelector('.countdown-wrap'),
   statusMessage:    $('status-message'),
   marketBadge:      $('market-state'),
   marketLabel:      $('market-label'),
   detailBody:       $('detail-body'),
+  detailChart:      $('detail-chart'),
   detailArticles:   $('detail-articles'),
   detailStoploss:   $('detail-stoploss'),
   detailRisk:       $('detail-risk'),
+  alertModal:       $('alert-modal'),
+  alertModalSymbol: $('alert-modal-symbol'),
+  alertAbove:       $('alert-above'),
+  alertBelow:       $('alert-below'),
+  alertSaveBtn:     $('alert-save-btn'),
+  alertClearBtn:    $('alert-clear-btn'),
+  alertCancelBtn:   $('alert-cancel-btn'),
 };
 
 // ─── Formatting helpers ────────────────────────────────────
@@ -108,7 +123,7 @@ function setStatus(msg, type = '') {
   dom.statusMessage.className = type;
 }
 
-function setMarketState(state) {
+function setMarketState(ms) {
   const labels = {
     REGULAR: 'Marknaden öppen',
     PRE: 'Pre-market',
@@ -123,12 +138,13 @@ function setMarketState(state) {
     CLOSED: 'closed',
     UNKNOWN: ''
   };
-  dom.marketBadge.className = `market-badge ${classes[state] || ''}`;
-  dom.marketLabel.textContent = labels[state] || state;
+  dom.marketBadge.className = `market-badge ${classes[ms] || ''}`;
+  dom.marketLabel.textContent = labels[ms] || ms;
 }
 
 // ─── localStorage ─────────────────────────────────────────
-const STORAGE_KEY = 'tradeinfo_watchlist';
+const STORAGE_KEY        = 'tradeinfo_watchlist';
+const ALERTS_STORAGE_KEY = 'tradeinfo_alerts';
 
 function loadWatchlist() {
   try {
@@ -139,6 +155,17 @@ function loadWatchlist() {
 
 function saveWatchlist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.watchlist));
+}
+
+function loadAlerts() {
+  try {
+    const saved = localStorage.getItem(ALERTS_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch { return {}; }
+}
+
+function saveAlerts() {
+  localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(state.alerts));
 }
 
 // ─── Symbol list rendering ─────────────────────────────────
@@ -225,6 +252,33 @@ function updateWatchlistCount() {
   dom.watchlistCount.textContent = `${n} ${n === 1 ? 'aktie' : 'aktier'}`;
 }
 
+// ─── Sort helpers ─────────────────────────────────────────
+function getSortedWatchlist() {
+  if (!state.sortKey) return state.watchlist;
+  return [...state.watchlist].sort((a, b) => {
+    const qa = state.quotes[a];
+    const qb = state.quotes[b];
+    if (!qa || !qb) return 0;
+    return state.sortDir * ((qa[state.sortKey] ?? 0) - (qb[state.sortKey] ?? 0));
+  });
+}
+
+function updateSortHeaders() {
+  const ths = document.querySelectorAll('#watchlist-table th[data-sort-key]');
+  for (const th of ths) {
+    th.classList.remove('sort-active');
+    const arrow = th.querySelector('.sort-arrow');
+    if (arrow) arrow.remove();
+    if (th.dataset.sortKey === state.sortKey) {
+      th.classList.add('sort-active');
+      const span = document.createElement('span');
+      span.className = 'sort-arrow';
+      span.textContent = state.sortDir === -1 ? '↓' : '↑';
+      th.appendChild(span);
+    }
+  }
+}
+
 // ─── Watchlist table rendering ─────────────────────────────
 function renderWatchlist() {
   const hasStocks = state.watchlist.length > 0;
@@ -233,13 +287,15 @@ function renderWatchlist() {
 
   if (!hasStocks) return;
 
+  const sorted = getSortedWatchlist();
   const fragment = document.createDocumentFragment();
 
-  for (const symbol of state.watchlist) {
+  for (const symbol of sorted) {
     const q = state.quotes[symbol];
     const prev = state.prevQuotes[symbol];
     const isUp   = q && prev && q.price > prev.price;
     const isDown = q && prev && q.price < prev.price;
+    const hasAlert = !!(state.alerts[symbol]?.above || state.alerts[symbol]?.below);
 
     const row = document.createElement('tr');
     row.dataset.symbol = symbol;
@@ -247,7 +303,7 @@ function renderWatchlist() {
     if (isUp)   { row.classList.add('flash-up');   setTimeout(() => row.classList.remove('flash-up'),   900); }
     if (isDown) { row.classList.add('flash-down');  setTimeout(() => row.classList.remove('flash-down'), 900); }
 
-    const changeDir  = q ? (q.change >= 0 ? 'up' : 'down')    : '';
+    const changeDir    = q ? (q.change >= 0 ? 'up' : 'down')    : '';
     const changePctDir = q ? (q.changePct >= 0 ? 'up' : 'down') : '';
 
     row.innerHTML = `
@@ -272,12 +328,20 @@ function renderWatchlist() {
       <td class="${q && q.priceToBook !== null ? 'cell-muted' : 'cell-null'}">${q ? fmt(q.priceToBook) : skeleton()}</td>
       <td class="cell-muted">${q ? bidAsk(q) : skeleton()}</td>
       <td class="cell-muted">${q ? bidAsk(q, true) : skeleton()}</td>
-      <td><button class="btn-remove" data-symbol="${escHtml(symbol)}" title="Ta bort">&times;</button></td>
+      <td>
+        <button class="btn-alert${hasAlert ? ' active' : ''}" data-symbol="${escHtml(symbol)}" title="Prisnotifiering">&#128276;</button>
+        <button class="btn-remove" data-symbol="${escHtml(symbol)}" title="Ta bort">&times;</button>
+      </td>
     `;
 
     row.querySelector('.btn-remove').addEventListener('click', (e) => {
       e.stopPropagation();
       toggleWatchlist(symbol);
+    });
+
+    row.querySelector('.btn-alert').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAlertModal(symbol);
     });
 
     row.addEventListener('click', () => openStockDetail(symbol));
@@ -287,6 +351,7 @@ function renderWatchlist() {
 
   dom.watchlistBody.innerHTML = '';
   dom.watchlistBody.appendChild(fragment);
+  updateSortHeaders();
 }
 
 function skeleton() {
@@ -329,7 +394,10 @@ async function fetchQuotes() {
     const data = await res.json();
 
     for (const q of data) {
+      const prev = state.quotes[q.symbol];
       state.quotes[q.symbol] = q;
+      // Check price alerts on each refresh
+      if (prev) checkAlerts(q.symbol, q.price, prev.price);
     }
 
     renderWatchlist();
@@ -388,19 +456,45 @@ async function fetchNasdaqSymbols() {
 function startAutoRefresh() {
   clearInterval(state.refreshTimer);
   clearInterval(state.countdownTimer);
+  state.refreshTimer = null;
 
-  state.countdownValue = 30;
+  const interval = state.refreshInterval;
+
+  if (interval === 0) {
+    // Manual mode: hide countdown
+    dom.countdownWrap.style.display = 'none';
+    return;
+  }
+
+  dom.countdownWrap.style.display = '';
+  state.countdownValue = interval;
+  dom.countdown.textContent = interval;
 
   state.refreshTimer = setInterval(() => {
     fetchQuotes();
-    state.countdownValue = 30;
-  }, 30_000);
+    state.countdownValue = interval;
+  }, interval * 1000);
 
   state.countdownTimer = setInterval(() => {
     state.countdownValue = Math.max(0, state.countdownValue - 1);
     dom.countdown.textContent = state.countdownValue;
   }, 1_000);
 }
+
+// ─── Page Visibility API — pause/resume on tab switch ─────
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearInterval(state.refreshTimer);
+    clearInterval(state.countdownTimer);
+    state.refreshTimer = null;
+  } else {
+    // Tab became visible: fetch immediately then restart cycle
+    if (state.refreshInterval > 0) {
+      fetchQuotes();
+      startAutoRefresh();
+    }
+  }
+});
 
 // ─── Search ────────────────────────────────────────────────
 let searchDebounce = null;
@@ -434,8 +528,93 @@ dom.loadMoreBtn.addEventListener('click', () => {
 // ─── Manual refresh ────────────────────────────────────────
 dom.refreshBtn.addEventListener('click', () => {
   fetchQuotes();
-  state.countdownValue = 30;
-  dom.countdown.textContent = 30;
+  if (state.refreshInterval > 0) {
+    state.countdownValue = state.refreshInterval;
+    dom.countdown.textContent = state.refreshInterval;
+  }
+});
+
+// ─── Refresh interval select ───────────────────────────────
+dom.refreshInterval.addEventListener('change', () => {
+  state.refreshInterval = parseInt(dom.refreshInterval.value, 10);
+  startAutoRefresh();
+});
+
+// ─── Column sort ───────────────────────────────────────────
+document.querySelector('#watchlist-table thead').addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-sort-key]');
+  if (!th) return;
+  const key = th.dataset.sortKey;
+  if (state.sortKey === key) {
+    state.sortDir *= -1;
+  } else {
+    state.sortKey = key;
+    state.sortDir = -1;
+  }
+  renderWatchlist();
+});
+
+// ─── Price alerts ─────────────────────────────────────────
+function checkAlerts(symbol, newPrice, prevPrice) {
+  const alert = state.alerts[symbol];
+  if (!alert || !newPrice || !prevPrice) return;
+
+  if (alert.above && prevPrice < alert.above && newPrice >= alert.above) {
+    sendNotification(symbol, `${symbol} passerade $${alert.above} uppåt (nu $${newPrice.toFixed(2)})`);
+  }
+  if (alert.below && prevPrice > alert.below && newPrice <= alert.below) {
+    sendNotification(symbol, `${symbol} passerade $${alert.below} nedåt (nu $${newPrice.toFixed(2)})`);
+  }
+}
+
+function sendNotification(symbol, body) {
+  if (Notification.permission !== 'granted') return;
+  new Notification(`TradeInfo – ${symbol}`, { body, icon: '/favicon.ico' });
+}
+
+function openAlertModal(symbol) {
+  state.alertModalSymbol = symbol;
+  dom.alertModalSymbol.textContent = symbol;
+  const existing = state.alerts[symbol] ?? {};
+  dom.alertAbove.value = existing.above ?? '';
+  dom.alertBelow.value = existing.below ?? '';
+  dom.alertModal.style.display = 'flex';
+  dom.alertAbove.focus();
+}
+
+function closeAlertModal() {
+  dom.alertModal.style.display = 'none';
+  state.alertModalSymbol = null;
+}
+
+dom.alertSaveBtn.addEventListener('click', () => {
+  const sym = state.alertModalSymbol;
+  if (!sym) return;
+  const above = parseFloat(dom.alertAbove.value);
+  const below = parseFloat(dom.alertBelow.value);
+  state.alerts[sym] = {
+    above: isNaN(above) ? null : above,
+    below: isNaN(below) ? null : below,
+  };
+  saveAlerts();
+  closeAlertModal();
+  renderWatchlist();
+});
+
+dom.alertClearBtn.addEventListener('click', () => {
+  const sym = state.alertModalSymbol;
+  if (sym) {
+    delete state.alerts[sym];
+    saveAlerts();
+  }
+  closeAlertModal();
+  renderWatchlist();
+});
+
+dom.alertCancelBtn.addEventListener('click', closeAlertModal);
+
+dom.alertModal.addEventListener('click', (e) => {
+  if (e.target === dom.alertModal) closeAlertModal();
 });
 
 // ─── Detail panel ──────────────────────────────────────────
@@ -443,6 +622,7 @@ async function openStockDetail(symbol) {
   state.detailSymbol = symbol;
   state.currentRisk = 'loading';
   renderDetailBody(state.quotes[symbol], symbol, 'loading');
+  renderIntradayChart(symbol);
 
   try {
     const res = await fetch(`/api/risk/${encodeURIComponent(symbol)}`);
@@ -456,6 +636,48 @@ async function openStockDetail(symbol) {
       state.currentRisk = null;
       renderDetailBody(state.quotes[symbol], symbol, null);
     }
+  }
+}
+
+// ─── Intraday SVG chart ───────────────────────────────────
+async function renderIntradayChart(symbol) {
+  dom.detailChart.style.display = 'none';
+  dom.detailChart.innerHTML = '';
+  try {
+    const res = await fetch(`/api/chart/${encodeURIComponent(symbol)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.closes || data.closes.length < 2) return;
+
+    const W = 300, H = 80;
+    const closes = data.closes;
+    const open   = data.open;
+    const minVal = Math.min(...closes);
+    const maxVal = Math.max(...closes);
+    const range  = maxVal - minVal || 1;
+
+    function toX(i) { return (i / (closes.length - 1)) * W; }
+    function toY(v) { return H - ((v - minVal) / range) * (H - 8) - 4; }
+
+    const points = closes.map((c, i) => `${toX(i).toFixed(1)},${toY(c).toFixed(1)}`).join(' ');
+
+    // Horizontal open-price reference line
+    const openY = open != null ? toY(open).toFixed(1) : null;
+    const openLine = openY != null
+      ? `<line x1="0" y1="${openY}" x2="${W}" y2="${openY}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3,3"/>`
+      : '';
+
+    const lastPrice  = closes.at(-1);
+    const lineColor  = lastPrice >= (open ?? lastPrice) ? 'var(--positive)' : 'var(--negative)';
+
+    dom.detailChart.innerHTML = `
+      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+        ${openLine}
+        <polyline points="${points}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+      </svg>`;
+    dom.detailChart.style.display = 'block';
+  } catch (err) {
+    console.error('Intraday chart error:', err);
   }
 }
 
@@ -578,6 +800,9 @@ function renderDetailBody(q, symbol, risk) {
   renderArticles(risk);
 
   if (risk?.stopLoss) {
+    const vwapRow = risk.vwap != null
+      ? item('VWAP', `${fmtPrice(risk.vwap, q.currency)} <span class="sl-vwap">ref</span>`)
+      : '';
     dom.detailStoploss.innerHTML = `<div class="detail-col detail-col--sl">
       <div class="detail-col-title">Stop Loss ▼</div>
       ${item('ATR (14d)',     fmtPrice(risk.stopLoss.atr, q.currency))}
@@ -585,6 +810,7 @@ function renderDetailBody(q, symbol, risk) {
       ${item('Standard (2×)', `${fmtPrice(risk.stopLoss.standard.price, q.currency)} <span class="sl-pct">${risk.stopLoss.standard.pct}%</span>`)}
       ${item('Bred (3×)',     `${fmtPrice(risk.stopLoss.wide.price,     q.currency)} <span class="sl-pct">${risk.stopLoss.wide.pct}%</span>`)}
       ${item('Swing Low',     `${fmtPrice(risk.stopLoss.swingLow.price, q.currency)} <span class="sl-pct">${risk.stopLoss.swingLow.pct}%</span>`)}
+      ${vwapRow}
     </div>`;
   } else {
     dom.detailStoploss.innerHTML = '';
@@ -630,15 +856,24 @@ function renderDetailBody(q, symbol, risk) {
 
 // ─── Init ──────────────────────────────────────────────────
 async function init() {
-  // Load persisted watchlist
+  // Load persisted watchlist and alerts
   state.watchlist = loadWatchlist();
+  state.alerts    = loadAlerts();
   updateWatchlistCount();
   renderWatchlist();
+
+  // Request notification permission
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
+  // Sync refresh interval select to state
+  state.refreshInterval = parseInt(dom.refreshInterval.value, 10);
 
   // Start auto-refresh cycle
   startAutoRefresh();
 
-  // Fetch initial data in parallel
+  // Fetch initial data
   await fetchNasdaqSymbols();
 
   // Fetch quotes for saved watchlist

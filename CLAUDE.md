@@ -49,3 +49,11 @@ API endpoints:
 RSI (14), 5-day momentum, SMA20, MA50/200 cross, price vs SMA50, 52-week position, P/E, forward P/E, news sentiment → KÖP / HÅLL / SÄLJ
 
 **Data flow:** Browser → Express API → Yahoo Finance v7 / NASDAQ Trader / Google News / Reddit → normalize → JSON → frontend state → table + detail render
+
+## TODO
+
+- **Yahoo Finance fallback** — automatisk retry med backoff om crumb/cookie slutar fungera (just nu krävs manuell serveromstart)
+- **Riskchache-begränsning** — `riskCache` växer obegränsat; lägg till max-storlek eller LRU-rensning
+- **Sorterbar tabell** — klicka på kolumnrubrik för att sortera bevakningslistan
+- **Prisnotifieringar** — alert när en aktie når ett angivet pris
+- **CSV-export** — exportera bevakningslistan till CSV
