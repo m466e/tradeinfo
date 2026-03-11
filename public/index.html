@@ -102,6 +102,43 @@
         </div>
       </div>
 
+      <!-- Portfolio section -->
+      <div id="portfolio-panel" class="portfolio-collapsed">
+        <div class="portfolio-header">
+          <button id="portfolio-toggle" class="portfolio-toggle-btn" title="Visa/dölj portfölj">&#9654;</button>
+          <h2>Portfölj</h2>
+          <span id="portfolio-count" class="count-badge">0 positioner</span>
+          <span id="portfolio-total-pl" class="portfolio-header-pl"></span>
+        </div>
+        <div id="portfolio-body">
+          <div id="portfolio-empty" class="portfolio-empty">Inga positioner. Lägg till en aktie nedan.</div>
+          <div id="portfolio-table-wrap" style="display:none">
+            <table id="portfolio-table">
+              <thead>
+                <tr>
+                  <th class="pcol-symbol">Symbol</th>
+                  <th class="pcol-shares">Antal</th>
+                  <th class="pcol-avg">Inköpspris</th>
+                  <th class="pcol-cur">Nuv. Pris</th>
+                  <th class="pcol-pld">P&amp;L ($)</th>
+                  <th class="pcol-plp">P&amp;L (%)</th>
+                  <th class="pcol-mv">Marknadsvärde</th>
+                  <th class="pcol-action"></th>
+                </tr>
+              </thead>
+              <tbody id="portfolio-body-rows"></tbody>
+            </table>
+          </div>
+          <div id="portfolio-summary" style="display:none" class="portfolio-summary"></div>
+          <div class="portfolio-add-row">
+            <input type="text"   id="pf-symbol"    class="pf-input pf-input--symbol" placeholder="Symbol" autocomplete="off" spellcheck="false">
+            <input type="number" id="pf-shares"    class="pf-input pf-input--num"    placeholder="Antal"  min="0.0001" step="any">
+            <input type="number" id="pf-avg-price" class="pf-input pf-input--num"    placeholder="Inköpspris ($)" min="0.0001" step="any">
+            <button id="pf-add-btn" class="btn-primary pf-add-btn">Lägg till</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Detail section (below watchlist) -->
       <div id="detail-panel">
         <div class="detail-top">

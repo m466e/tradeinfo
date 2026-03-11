@@ -27,6 +27,7 @@ const state = {
   sortDir: -1,          // -1 = descending, 1 = ascending
   alertModalSymbol: null,
   refreshInterval: 30,  // seconds; 0 = manual
+  portfolio: [],        // [{ symbol, shares, avgPrice, addedAt }]
 };
 
 // ─── DOM refs ─────────────────────────────────────────────
@@ -63,6 +64,18 @@ const dom = {
   alertSaveBtn:     $('alert-save-btn'),
   alertClearBtn:    $('alert-clear-btn'),
   alertCancelBtn:   $('alert-cancel-btn'),
+  portfolioPanel:   $('portfolio-panel'),
+  portfolioToggle:  $('portfolio-toggle'),
+  portfolioCount:   $('portfolio-count'),
+  portfolioTotalPl: $('portfolio-total-pl'),
+  portfolioEmpty:   $('portfolio-empty'),
+  portfolioTableWrap: $('portfolio-table-wrap'),
+  portfolioBodyRows:  $('portfolio-body-rows'),
+  portfolioSummary:   $('portfolio-summary'),
+  pfSymbol:   $('pf-symbol'),
+  pfShares:   $('pf-shares'),
+  pfAvgPrice: $('pf-avg-price'),
+  pfAddBtn:   $('pf-add-btn'),
 };
 
 // ─── Formatting helpers ────────────────────────────────────
@@ -143,8 +156,9 @@ function setMarketState(ms) {
 }
 
 // ─── localStorage ─────────────────────────────────────────
-const STORAGE_KEY        = 'tradeinfo_watchlist';
-const ALERTS_STORAGE_KEY = 'tradeinfo_alerts';
+const STORAGE_KEY           = 'tradeinfo_watchlist';
+const ALERTS_STORAGE_KEY    = 'tradeinfo_alerts';
+const PORTFOLIO_STORAGE_KEY = 'tradeinfo_portfolio';
 
 function loadWatchlist() {
   try {
@@ -166,6 +180,147 @@ function loadAlerts() {
 
 function saveAlerts() {
   localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(state.alerts));
+}
+
+function loadPortfolio() {
+  try {
+    const saved = localStorage.getItem(PORTFOLIO_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch { return []; }
+}
+
+function savePortfolio() {
+  localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(state.portfolio));
+}
+
+// ─── Portfolio rendering ───────────────────────────────────
+function renderPortfolio() {
+  const positions = state.portfolio;
+  const n = positions.length;
+
+  const countWord = n === 1 ? 'position' : 'positioner';
+  dom.portfolioCount.textContent = `${n} ${countWord}`;
+
+  if (n === 0) {
+    dom.portfolioEmpty.style.display = '';
+    dom.portfolioTableWrap.style.display = 'none';
+    dom.portfolioSummary.style.display = 'none';
+    dom.portfolioTotalPl.textContent = '';
+    dom.portfolioTotalPl.className = 'portfolio-header-pl';
+    return;
+  }
+
+  dom.portfolioEmpty.style.display = 'none';
+  dom.portfolioTableWrap.style.display = '';
+
+  let totalCost = 0;
+  let totalMarketValue = 0;
+  let allPriced = true;
+
+  const fragment = document.createDocumentFragment();
+
+  for (const pos of positions) {
+    const { symbol, shares, avgPrice } = pos;
+    const currentPrice = state.quotes[symbol]?.price ?? null;
+    const costBasis    = shares * avgPrice;
+    const marketValue  = currentPrice !== null ? shares * currentPrice : null;
+    const plDollar     = marketValue !== null ? marketValue - costBasis : null;
+    const plPct        = plDollar   !== null ? (plDollar / costBasis) * 100 : null;
+
+    totalCost += costBasis;
+    if (marketValue !== null) {
+      totalMarketValue += marketValue;
+    } else {
+      allPriced = false;
+    }
+
+    const plDollarStr = plDollar !== null
+      ? `${plDollar >= 0 ? '+' : ''}${fmtPrice(plDollar)}`
+      : '–';
+    const plPctStr = plPct !== null
+      ? `${plPct >= 0 ? '+' : ''}${plPct.toFixed(2)}%`
+      : '–';
+    const plDir = plDollar !== null ? (plDollar >= 0 ? 'pos' : 'neg') : '';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="pcell-symbol">${escHtml(symbol)}</td>
+      <td class="pcell-num">${fmt(shares, { decimals: shares % 1 === 0 ? 0 : 4 })}</td>
+      <td class="pcell-num">${fmtPrice(avgPrice)}</td>
+      <td class="pcell-num">${currentPrice !== null ? fmtPrice(currentPrice) : '–'}</td>
+      <td class="pcell-pl ${plDir}">${plDollarStr}</td>
+      <td class="pcell-pl ${plDir}">${plPctStr}</td>
+      <td class="pcell-num">${marketValue !== null ? fmtPrice(marketValue) : '–'}</td>
+      <td><button class="pf-remove-btn" data-symbol="${escHtml(symbol)}" title="Ta bort">&times;</button></td>
+    `;
+
+    tr.querySelector('.pf-remove-btn').addEventListener('click', () => {
+      removePortfolioPosition(symbol);
+    });
+
+    fragment.appendChild(tr);
+  }
+
+  dom.portfolioBodyRows.innerHTML = '';
+  dom.portfolioBodyRows.appendChild(fragment);
+
+  // Summary
+  const totalPl       = allPriced ? totalMarketValue - totalCost : null;
+  const totalPlPct    = totalPl   !== null ? (totalPl / totalCost) * 100 : null;
+  const plDollarStr   = totalPl   !== null ? `${totalPl >= 0 ? '+' : ''}${fmtPrice(totalPl)}` : '–';
+  const plPctStr      = totalPlPct !== null ? `${totalPlPct >= 0 ? '+' : ''}${totalPlPct.toFixed(2)}%` : '–';
+  const plDir         = totalPl   !== null ? (totalPl >= 0 ? 'pos' : 'neg') : '';
+
+  dom.portfolioSummary.style.display = '';
+  dom.portfolioSummary.innerHTML = `
+    <span class="psum-label">Kostnadsbas:</span><span class="psum-val">${fmtPrice(totalCost)}</span>
+    <span class="psum-label">Marknadsvärde:</span><span class="psum-val">${allPriced ? fmtPrice(totalMarketValue) : '–'}</span>
+    <span class="psum-label">Total P&amp;L:</span><span class="psum-val psum-pl ${plDir}">${plDollarStr} / ${plPctStr}</span>
+  `;
+
+  // Update header badge
+  dom.portfolioTotalPl.textContent = totalPl !== null ? `${plDollarStr} (${plPctStr})` : '';
+  dom.portfolioTotalPl.className = `portfolio-header-pl ${plDir}`;
+}
+
+function addPortfolioPosition() {
+  const symbol   = dom.pfSymbol.value.trim().toUpperCase();
+  const shares   = parseFloat(dom.pfShares.value);
+  const avgPrice = parseFloat(dom.pfAvgPrice.value);
+
+  if (!symbol || isNaN(shares) || shares <= 0 || isNaN(avgPrice) || avgPrice <= 0) {
+    dom.pfSymbol.focus();
+    return;
+  }
+
+  const existing = state.portfolio.find(p => p.symbol === symbol);
+  if (existing) {
+    // Volume-weighted average price
+    const totalShares    = existing.shares + shares;
+    const totalCost      = existing.shares * existing.avgPrice + shares * avgPrice;
+    existing.shares      = totalShares;
+    existing.avgPrice    = totalCost / totalShares;
+  } else {
+    state.portfolio.push({ symbol, shares, avgPrice, addedAt: Date.now() });
+  }
+
+  savePortfolio();
+
+  dom.pfSymbol.value   = '';
+  dom.pfShares.value   = '';
+  dom.pfAvgPrice.value = '';
+  dom.pfSymbol.focus();
+
+  renderPortfolio();
+}
+
+function removePortfolioPosition(symbol) {
+  const idx = state.portfolio.findIndex(p => p.symbol === symbol);
+  if (idx !== -1) {
+    state.portfolio.splice(idx, 1);
+    savePortfolio();
+    renderPortfolio();
+  }
 }
 
 // ─── Symbol list rendering ─────────────────────────────────
@@ -407,6 +562,7 @@ async function fetchQuotes() {
     }
 
     renderWatchlist();
+    renderPortfolio();
 
     // Refresh detail panel (reuse cached risk)
     if (state.detailSymbol) {
@@ -1048,11 +1204,13 @@ function renderDetailBody(q, symbol, risk) {
 
 // ─── Init ──────────────────────────────────────────────────
 async function init() {
-  // Load persisted watchlist and alerts
+  // Load persisted watchlist, alerts, and portfolio
   state.watchlist = loadWatchlist();
   state.alerts    = loadAlerts();
+  state.portfolio = loadPortfolio();
   updateWatchlistCount();
   renderWatchlist();
+  renderPortfolio();
 
   // Request notification permission
   if ('Notification' in window && Notification.permission === 'default') {
@@ -1079,4 +1237,22 @@ init();
 // ─── Sidebar toggle ────────────────────────────────────────
 document.getElementById('sidebar-toggle').addEventListener('click', () => {
   document.querySelector('main').classList.toggle('sidebar-hidden');
+});
+
+// ─── Portfolio toggle ───────────────────────────────────────
+dom.portfolioToggle.addEventListener('click', () => {
+  dom.portfolioPanel.classList.toggle('portfolio-collapsed');
+});
+
+// ─── Portfolio add button ───────────────────────────────────
+dom.pfAddBtn.addEventListener('click', addPortfolioPosition);
+
+dom.pfSymbol.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') dom.pfShares.focus();
+});
+dom.pfShares.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') dom.pfAvgPrice.focus();
+});
+dom.pfAvgPrice.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addPortfolioPosition();
 });
