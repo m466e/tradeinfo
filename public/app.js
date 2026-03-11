@@ -650,44 +650,101 @@ let _chartData = null;
 let _chartResizeObserver = null;
 
 function buildChartSVG(closes, timestamps, open, containerW) {
-  const W = containerW || 300;
-  const H = 120;
-  const PAD = 4;
+  const W    = containerW || 300;
+  const H    = 160;
+  const PADL = 50;   // space for Y price labels
+  const PADR = 6;
+  const PADT = 6;
+  const PADB = 20;   // space for X time labels
+  const chartW = W - PADL - PADR;
+  const chartH = H - PADT - PADB;
+
+  const minVal    = Math.min(...closes);
+  const maxVal    = Math.max(...closes);
+  const range     = maxVal - minVal || 1;
   const lastPrice = closes.at(-1);
-  const minVal = Math.min(...closes);
-  const maxVal = Math.max(...closes);
-  const range  = maxVal - minVal || 1;
   const lineColor = lastPrice >= (open ?? lastPrice) ? 'var(--positive)' : 'var(--negative)';
 
-  function toX(i) { return PAD + (i / (closes.length - 1)) * (W - PAD * 2); }
-  function toY(v) { return H - PAD - ((v - minVal) / range) * (H - PAD * 2); }
+  function toX(i) { return PADL + (i / (closes.length - 1)) * chartW; }
+  function toY(v) { return PADT + chartH - ((v - minVal) / range) * chartH; }
 
-  const points = closes.map((c, i) => `${toX(i).toFixed(1)},${toY(c).toFixed(1)}`).join(' ');
+  // ── Nice Y-tick levels ──────────────────────────────────
+  function niceStep(r, steps) {
+    const rough = r / steps;
+    const mag   = Math.pow(10, Math.floor(Math.log10(rough)));
+    const norm  = rough / mag;
+    const nice  = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+    return nice * mag;
+  }
+  const step   = niceStep(range, 3);
+  const yStart = Math.ceil(minVal / step) * step;
+  const yTicks = [];
+  for (let v = yStart; v <= maxVal + step * 0.01; v = parseFloat((v + step).toFixed(10))) {
+    if (v >= minVal - step * 0.01 && v <= maxVal + step * 0.01) yTicks.push(v);
+  }
 
-  // Fill area under line
-  const firstX = toX(0).toFixed(1);
-  const lastX  = toX(closes.length - 1).toFixed(1);
-  const fillPts = `${firstX},${H} ${points} ${lastX},${H}`;
+  // ── X-ticks at whole hours (NYSE time) ─────────────────
+  const xTicks = [];
+  if (timestamps?.length) {
+    for (let i = 0; i < timestamps.length; i++) {
+      const d = new Date(timestamps[i] * 1000);
+      const mins = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
+      if (mins.endsWith(':00')) {
+        xTicks.push({ i, label: mins.replace(':00', '') + ':00' });
+      }
+    }
+  }
 
-  const openY = open != null ? toY(open).toFixed(1) : null;
+  // ── Grid + labels ───────────────────────────────────────
+  const gridLines = yTicks.map(v => {
+    const y = toY(v).toFixed(1);
+    return `<line x1="${PADL}" y1="${y}" x2="${W - PADR}" y2="${y}" stroke="var(--border)" stroke-width="0.5"/>`;
+  }).join('');
+
+  const yLabels = yTicks.map(v => {
+    const y = toY(v).toFixed(1);
+    const lbl = v >= 1000 ? v.toFixed(0) : v >= 100 ? v.toFixed(1) : v.toFixed(2);
+    return `<text x="${PADL - 5}" y="${y}" dy="0.35em" text-anchor="end" font-size="9" fill="var(--text-muted)" font-family="'SF Mono',Consolas,monospace">${lbl}</text>`;
+  }).join('');
+
+  const xLabels = xTicks.map(({ i, label }) => {
+    const x = toX(i).toFixed(1);
+    return `<line x1="${x}" y1="${PADT + chartH}" x2="${x}" y2="${PADT + chartH + 3}" stroke="var(--border)" stroke-width="0.5"/>
+            <text x="${x}" y="${H - 3}" text-anchor="middle" font-size="9" fill="var(--text-muted)" font-family="'SF Mono',Consolas,monospace">${label}</text>`;
+  }).join('');
+
+  // ── Price line + fill ───────────────────────────────────
+  const points  = closes.map((c, i) => `${toX(i).toFixed(1)},${toY(c).toFixed(1)}`).join(' ');
+  const baseY   = (PADT + chartH).toFixed(1);
+  const fillPts = `${toX(0).toFixed(1)},${baseY} ${points} ${toX(closes.length - 1).toFixed(1)},${baseY}`;
+
+  const openY    = open != null ? toY(open).toFixed(1) : null;
   const openLine = openY != null
-    ? `<line x1="${PAD}" y1="${openY}" x2="${W - PAD}" y2="${openY}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3,3" class="chart-open-line"/>`
+    ? `<line x1="${PADL}" y1="${openY}" x2="${W - PADR}" y2="${openY}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3,3"/>`
     : '';
 
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" data-w="${W}" data-h="${H}" data-pad="${PAD}">
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg"
+      data-w="${W}" data-h="${H}" data-padl="${PADL}" data-padr="${PADR}" data-padt="${PADT}" data-padb="${PADB}">
     <defs>
       <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${lineColor}" stop-opacity="0.18"/>
         <stop offset="100%" stop-color="${lineColor}" stop-opacity="0.01"/>
       </linearGradient>
+      <clipPath id="chartClip">
+        <rect x="${PADL}" y="${PADT}" width="${chartW}" height="${chartH}"/>
+      </clipPath>
     </defs>
-    ${openLine}
-    <polygon points="${fillPts}" fill="url(#chartFill)"/>
-    <polyline points="${points}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
-    <line class="chart-crosshair" x1="-1" y1="0" x2="-1" y2="${H}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2,2"/>
+    ${gridLines}
+    ${yLabels}
+    ${xLabels}
+    <g clip-path="url(#chartClip)">
+      ${openLine}
+      <polygon points="${fillPts}" fill="url(#chartFill)"/>
+      <polyline points="${points}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+    </g>
+    <line class="chart-crosshair" x1="-1" y1="${PADT}" x2="-1" y2="${PADT + chartH}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2,2"/>
     <circle class="chart-dot" cx="-10" cy="-10" r="3" fill="${lineColor}" stroke="var(--bg-primary)" stroke-width="1.5"/>
   </svg>`;
-}
 
 function attachChartInteraction(closes, timestamps, open) {
   const svg = dom.detailChart.querySelector('svg');
@@ -695,37 +752,40 @@ function attachChartInteraction(closes, timestamps, open) {
   if (!svg) return;
 
   function onMove(e) {
-    const rect = svg.getBoundingClientRect();
+    const rect  = svg.getBoundingClientRect();
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const relX = clientX - rect.left;
-    const W = parseFloat(svg.getAttribute('data-w') || rect.width);
-    const H = parseFloat(svg.getAttribute('data-h') || rect.height);
-    const PAD = parseFloat(svg.getAttribute('data-pad') || 4);
+    const relX  = clientX - rect.left;
+    const W     = parseFloat(svg.getAttribute('data-w')    || rect.width);
+    const H     = parseFloat(svg.getAttribute('data-h')    || rect.height);
+    const PADL  = parseFloat(svg.getAttribute('data-padl') || 4);
+    const PADR  = parseFloat(svg.getAttribute('data-padr') || 4);
+    const PADT  = parseFloat(svg.getAttribute('data-padt') || 4);
+    const PADB  = parseFloat(svg.getAttribute('data-padb') || 4);
+    const chartW = W - PADL - PADR;
+    const chartH = H - PADT - PADB;
     const scaleX = rect.width > 0 ? W / rect.width : 1;
-    const svgX = relX * scaleX;
+    const svgX   = relX * scaleX;
 
-    const idx = Math.round(((svgX - PAD) / (W - PAD * 2)) * (closes.length - 1));
-    const i = Math.max(0, Math.min(closes.length - 1, idx));
+    const idx = Math.round(((svgX - PADL) / chartW) * (closes.length - 1));
+    const i   = Math.max(0, Math.min(closes.length - 1, idx));
     const price = closes[i];
-    const ts = timestamps?.[i];
+    const ts    = timestamps?.[i];
 
-    // Move crosshair
     const crosshair = svg.querySelector('.chart-crosshair');
     const dot = svg.querySelector('.chart-dot');
     if (crosshair) {
-      const xPos = PAD + (i / (closes.length - 1)) * (W - PAD * 2);
+      const xPos = PADL + (i / (closes.length - 1)) * chartW;
       crosshair.setAttribute('x1', xPos.toFixed(1));
       crosshair.setAttribute('x2', xPos.toFixed(1));
       const minVal = Math.min(...closes);
       const maxVal = Math.max(...closes);
       const range  = maxVal - minVal || 1;
-      const yPos = H - PAD - ((price - minVal) / range) * (H - PAD * 2);
+      const yPos   = PADT + chartH - ((price - minVal) / range) * chartH;
       if (dot) { dot.setAttribute('cx', xPos.toFixed(1)); dot.setAttribute('cy', yPos.toFixed(1)); }
     }
 
-    // Update tooltip
     if (tooltip) {
-      const timeStr = ts ? new Date(ts * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' }) : '';
+      const timeStr = ts ? new Date(ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' }) : '';
       tooltip.textContent = `$${price.toFixed(2)}${timeStr ? '  ' + timeStr : ''}`;
     }
   }

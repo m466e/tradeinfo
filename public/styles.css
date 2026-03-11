@@ -1002,11 +1002,10 @@ th .sort-arrow {
 #detail-chart svg {
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   cursor: crosshair;
-  flex: 1;
 }
 
 #detail-chart .chart-crosshair {
