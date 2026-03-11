@@ -745,6 +745,7 @@ function buildChartSVG(closes, timestamps, open, containerW) {
     <line class="chart-crosshair" x1="-1" y1="${PADT}" x2="-1" y2="${PADT + chartH}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2,2"/>
     <circle class="chart-dot" cx="-10" cy="-10" r="3" fill="${lineColor}" stroke="var(--bg-primary)" stroke-width="1.5"/>
   </svg>`;
+}
 
 function attachChartInteraction(closes, timestamps, open) {
   const svg = dom.detailChart.querySelector('svg');
