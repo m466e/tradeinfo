@@ -1,6 +1,16 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
+
+// Load .env file if present (no external dependency)
+try {
+  const env = readFileSync(new URL('.env', import.meta.url), 'utf8');
+  for (const line of env.split('\n')) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+  }
+} catch {}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -202,22 +212,24 @@ async function fetchPriceHistory(symbol, retryAuth = false) {
   return data?.chart?.result?.[0] ?? null;
 }
 
-// ─── Fetch intraday chart (1m interval, 1d range) ────────
-async function fetchIntradayChart(symbol, retryAuth = false) {
-  const auth = await getYFAuth();
-  const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=false&crumb=${encodeURIComponent(auth.crumb)}`;
-  const res = await fetch(url, {
-    headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/', 'Cookie': auth.cookie },
-  });
-  if (res.status === 401 || res.status === 403) {
-    if (retryAuth) throw new Error(`Intraday chart auth failed after retry: ${res.status}`);
-    console.warn(`Intraday chart got ${res.status}, refreshing auth with retry...`);
-    await getYFAuthWithRetry();
-    return fetchIntradayChart(symbol, true);
-  }
-  if (!res.ok) throw new Error(`Intraday chart API: ${res.status}`);
+// ─── Fetch intraday chart via Finnhub (1m candles) ───────
+const FINNHUB_TOKEN = process.env.FINNHUB_TOKEN ?? '';
+
+async function fetchIntradayChart(symbol) {
+  if (!FINNHUB_TOKEN) throw new Error('FINNHUB_TOKEN saknas i .env');
+
+  // NYSE/NASDAQ market hours: 09:30–16:00 ET
+  // Use a 24h window and let Finnhub return only market-hours candles
+  const to   = Math.floor(Date.now() / 1000);
+  const from = to - 24 * 3600;
+
+  const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=1&from=${from}&to=${to}&token=${FINNHUB_TOKEN}`;
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error(`Finnhub chart API: ${res.status}`);
   const data = await res.json();
-  return data?.chart?.result?.[0] ?? null;
+  // data.s === 'no_data' when market is closed or symbol unknown
+  if (data.s !== 'ok') throw new Error(`Finnhub: ${data.s ?? 'no_data'}`);
+  return data; // { t, o, h, l, c, v, s }
 }
 
 // ─── Fetch news (normalized to { title, link, publisher, time, source }) ──
@@ -632,28 +644,18 @@ app.get('/api/quote', async (req, res) => {
   }
 });
 
-// GET /api/chart/:symbol  — intraday 5m data for SVG chart
+// GET /api/chart/:symbol  — intraday 1m candles via Finnhub
 app.get('/api/chart/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
-    const result = await fetchIntradayChart(symbol);
-    if (!result) return res.status(502).json({ error: 'No chart data returned' });
+    const data = await fetchIntradayChart(symbol);
+    console.log(`[chart] ${symbol}: ${data.t.length} points from Finnhub`);
 
-    const timestamps = result.timestamp ?? [];
-    const q = result.indicators?.quote?.[0] ?? {};
-    const closes = q.close ?? [];
+    const open = data.o?.[0] ?? data.c?.[0] ?? null;
+    const high = data.h?.length ? Math.max(...data.h) : null;
+    const low  = data.l?.length ? Math.min(...data.l) : null;
 
-    // Filter out null data points, keeping timestamp and close aligned
-    const filtered = timestamps.map((t, i) => ({ t, c: closes[i] })).filter(p => p.c != null);
-    const filteredTimestamps = filtered.map(p => p.t);
-    const filteredCloses     = filtered.map(p => p.c);
-    console.log(`[chart] ${symbol}: ${timestamps.length} raw → ${filteredCloses.length} non-null points`);
-
-    const open = filteredCloses[0] ?? null;
-    const high = filteredCloses.length ? Math.max(...filteredCloses) : null;
-    const low  = filteredCloses.length ? Math.min(...filteredCloses) : null;
-
-    res.json({ timestamps: filteredTimestamps, closes: filteredCloses, open, high, low });
+    res.json({ timestamps: data.t, closes: data.c, open, high, low });
   } catch (err) {
     console.error(`Intraday chart error ${symbol}:`, err.message);
     res.status(502).json({ error: err.message });
